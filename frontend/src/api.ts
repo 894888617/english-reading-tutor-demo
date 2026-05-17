@@ -26,7 +26,7 @@ async function parseError(response: Response): Promise<string> {
 export async function getStory(): Promise<StoryResponse> {
   const response = await fetch(`${API_BASE_URL}/api/story`);
   if (!response.ok) {
-    throw new Error(`Failed to load story: ${await parseError(response)}`);
+    throw new Error(`故事加载失败： ${await parseError(response)}`);
   }
   return response.json();
 }
@@ -41,7 +41,7 @@ export async function saveLog(log: TutorLog): Promise<{ success: boolean }> {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to save log: ${await parseError(response)}`);
+    throw new Error(`保存对话记录失败： ${await parseError(response)}`);
   }
   return response.json();
 }

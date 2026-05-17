@@ -4,12 +4,12 @@ import java.util.List;
 
 public class StoryPage {
     private int page;
-    private List<String> sentences;
+    private List<StorySentence> sentences;
 
     public StoryPage() {
     }
 
-    public StoryPage(int page, List<String> sentences) {
+    public StoryPage(int page, List<StorySentence> sentences) {
         this.page = page;
         this.sentences = sentences;
     }
@@ -22,11 +22,11 @@ public class StoryPage {
         this.page = page;
     }
 
-    public List<String> getSentences() {
+    public List<StorySentence> getSentences() {
         return sentences;
     }
 
-    public void setSentences(List<String> sentences) {
+    public void setSentences(List<StorySentence> sentences) {
         this.sentences = sentences;
     }
 }
