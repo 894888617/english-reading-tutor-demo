@@ -21,13 +21,13 @@ public class MockSpeechAssessmentService implements SpeechAssessmentService {
 
     @Override
     public ReadingAssessmentResult assess(MultipartFile audio, String targetText) {
-        return assess(audio, targetText, targetText);
+        return assess(audio, targetText, null);
     }
 
     @Override
     public ReadingAssessmentResult assess(MultipartFile audio, String targetText, String recognizedText) {
         String safeTarget = StringUtils.hasText(targetText) ? targetText.trim() : "";
-        String safeRecognized = StringUtils.hasText(recognizedText) ? recognizedText.trim() : safeTarget;
+        String safeRecognized = StringUtils.hasText(recognizedText) ? recognizedText.trim() : mockRecognizedText(safeTarget);
         PronunciationDiffService.DiffResult diff = diffService.diff(safeTarget, safeRecognized);
         int issueCount = diff.issues().size();
         long missed = diff.issues().stream().filter(issue -> "missed".equals(issue.type())).count();
@@ -42,6 +42,13 @@ public class MockSpeechAssessmentService implements SpeechAssessmentService {
         int total = (int) Math.round(accuracy * 0.35 + fluency * 0.25 + completeness * 0.25 + clarity * 0.15);
         ReadingScore score = new ReadingScore(total, accuracy, fluency, completeness, clarity);
         return new ReadingAssessmentResult(safeTarget, safeRecognized, score, diff.wordResults(), diff.issues(), feedback(score, diff.issues()));
+    }
+
+    private String mockRecognizedText(String targetText) {
+        String recognized = targetText
+                .replaceFirst("(?i)\\bis\\b\\s*", "")
+                .replaceFirst("(?i)\\bhis\\b\\s*", "");
+        return StringUtils.hasText(recognized) ? recognized.replaceAll("\\s+([.,!?])", "$1").trim() : targetText;
     }
 
     private String feedback(ReadingScore score, List<PronunciationIssue> issues) {

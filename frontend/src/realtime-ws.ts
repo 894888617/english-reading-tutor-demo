@@ -3,6 +3,7 @@ import type { Book, Sentence } from './story';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed';
 export type MicStatus = 'idle' | 'requesting' | 'recording' | 'stopped' | 'failed';
+export type ResponseState = { hasActiveResponse: boolean; activeResponseId: string | null };
 
 export interface RealtimeDebugEvent {
   kind: 'system' | 'reading' | 'recording' | 'assessment' | 'correction' | 'status' | 'websocket' | 'event' | 'text' | 'transcript' | 'audio' | 'error';
@@ -49,6 +50,7 @@ export class RealtimeWsClient {
   private playbackContext?: AudioContext;
   private nextPlaybackTime = 0;
   private playbackSources: AudioBufferSourceNode[] = [];
+  private responseState: ResponseState = { hasActiveResponse: false, activeResponseId: null };
 
   async connect(options: RealtimeWsOptions): Promise<void> {
     this.options = options;
@@ -67,7 +69,7 @@ export class RealtimeWsClient {
 
       ws.onopen = () => {
         window.clearTimeout(timeoutId);
-        this.emitDebug('websocket', `已连接到 Java 后端：${url}`);
+        this.emitDebug('status', '连接成功');
         this.emitConnectionStatus('connected');
         this.sendControlMessage({
           type: 'start_lesson',
@@ -137,7 +139,6 @@ export class RealtimeWsClient {
       throw new Error('实时语音 WebSocket 尚未打开。');
     }
     this.ws.send(JSON.stringify(message));
-    this.emitDebug('websocket', `已发送控制消息：${message.type}`, message);
   }
 
   updateSentence(book: Book, pageNo: number, currentSentence: Sentence): void {
@@ -150,28 +151,36 @@ export class RealtimeWsClient {
   }
 
   readPage(pageNo: number, sentences: string[], speed: 'normal' | 'slow' = 'normal'): void {
+    this.prepareForNewResponse();
     this.sendControlMessage({ type: 'read_page', pageNo, sentences, speed, voiceStyle: this.options?.voiceStyle });
   }
 
   readSentence(sentence: string, speed: 'normal' | 'slow' = 'normal'): void {
+    this.prepareForNewResponse();
     this.sendControlMessage({ type: 'read_sentence', sentence, speed, voiceStyle: this.options?.voiceStyle });
   }
 
   repeatSentence(currentSentence: Sentence): void {
+    this.prepareForNewResponse();
     this.sendControlMessage({ type: 'repeat_sentence', sentence: currentSentence.english, currentSentence, voiceStyle: this.options?.voiceStyle });
   }
 
   readWord(word: string, sentence: string): void {
+    this.prepareForNewResponse();
     this.sendControlMessage({ type: 'read_word', word, sentence, voiceStyle: this.options?.voiceStyle });
   }
 
   sendAssessmentFeedback(result: ReadingAssessmentResult): void {
+    this.prepareForNewResponse();
     this.sendControlMessage({ type: 'assessment_feedback', result, voiceStyle: this.options?.voiceStyle });
   }
 
   stopPlayback(): void {
     this.clearPlaybackQueue();
-    this.sendControlMessage({ type: 'stop_playback' });
+    if (this.responseState.hasActiveResponse) {
+      this.sendControlMessage({ type: 'stop_playback' });
+      this.responseState = { hasActiveResponse: false, activeResponseId: null };
+    }
   }
 
   close(): void {
@@ -225,11 +234,13 @@ export class RealtimeWsClient {
       const event = JSON.parse(data);
       const type = event.type ?? 'unknown';
       if (type === 'playback_started') {
+        this.responseState = { hasActiveResponse: true, activeResponseId: null };
         this.options?.onPlaybackChange?.(true);
         this.emitDebug('reading', event.message ?? 'AI 开始朗读。', event);
         return;
       }
       if (type === 'playback_done') {
+        this.responseState = { hasActiveResponse: false, activeResponseId: null };
         this.options?.onPlaybackChange?.(false);
         this.emitDebug('reading', event.message ?? 'AI 朗读完成。', event);
         return;
@@ -243,6 +254,7 @@ export class RealtimeWsClient {
         return;
       }
       if (type === 'error') {
+        this.responseState = { hasActiveResponse: false, activeResponseId: null };
         this.emitDebug('error', event.message ?? '未知实时语音错误。', event);
         return;
       }
@@ -259,6 +271,16 @@ export class RealtimeWsClient {
     } catch (error) {
       this.emitDebug('event', `收到非 JSON WebSocket 消息：${String(data)}`, error);
     }
+  }
+
+  private prepareForNewResponse(): void {
+    if (!this.responseState.hasActiveResponse) {
+      this.clearPlaybackQueue();
+      return;
+    }
+    this.clearPlaybackQueue();
+    this.sendControlMessage({ type: 'stop_playback' });
+    this.responseState = { hasActiveResponse: false, activeResponseId: null };
   }
 
   private enqueuePcmPlayback(arrayBuffer: ArrayBuffer): void {
