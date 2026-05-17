@@ -31,22 +31,6 @@ export async function getStory(): Promise<StoryResponse> {
   return response.json();
 }
 
-export async function exchangeSdp(offerSdp: string): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/api/realtime/sdp`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/sdp',
-      Accept: 'application/sdp',
-    },
-    body: offerSdp,
-  });
-
-  if (!response.ok) {
-    throw new Error(`SDP exchange failed: ${await parseError(response)}`);
-  }
-  return response.text();
-}
-
 export async function saveLog(log: TutorLog): Promise<{ success: boolean }> {
   const response = await fetch(`${API_BASE_URL}/api/logs`, {
     method: 'POST',

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getStory, saveLog } from './api';
-import { RealtimeClient, type ConnectionStatus, type RealtimeDebugEvent } from './realtime';
+import { RealtimeWsClient, type ConnectionStatus, type MicStatus, type RealtimeDebugEvent } from './realtime-ws';
 import { fallbackStory, type StoryResponse } from './story';
 
 type DebugLog = {
@@ -19,10 +19,10 @@ function App() {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
-  const [micEnabled, setMicEnabled] = useState(false);
+  const [micStatus, setMicStatus] = useState<MicStatus>('idle');
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
-  const realtimeClientRef = useRef<RealtimeClient | null>(null);
+  const realtimeClientRef = useRef<RealtimeWsClient | null>(null);
   const logIdRef = useRef(1);
 
   useEffect(() => {
@@ -47,7 +47,7 @@ function App() {
   const isConnecting = connectionStatus === 'connecting';
   const isConnected = connectionStatus === 'connected';
   const canStart = connectionStatus === 'idle' || connectionStatus === 'failed' || connectionStatus === 'closed';
-  const dataChannelState = realtimeClientRef.current?.getDataChannelState() ?? 'not-created';
+  const webSocketState = realtimeClientRef.current?.getWebSocketState() ?? 'not-created';
 
   const progressLabel = useMemo(() => {
     if (!story || !currentPage) {
@@ -65,11 +65,14 @@ function App() {
         message,
       },
       ...currentLogs,
-    ].slice(0, 80));
+    ].slice(0, 100));
   }
 
   function handleRealtimeDebug(event: RealtimeDebugEvent) {
     appendLog(event.kind, event.message);
+    if (event.kind === 'error') {
+      setErrorMessage(event.message);
+    }
     if (event.kind === 'transcript' && story && currentPage) {
       void saveLog({
         role: 'student',
@@ -87,28 +90,32 @@ function App() {
     }
     setErrorMessage('');
     setConnectionStatus('connecting');
+    setMicStatus('idle');
     realtimeClientRef.current?.close();
-    const client = new RealtimeClient();
+    const client = new RealtimeWsClient();
     realtimeClientRef.current = client;
 
     try {
-      await client.start({
+      await client.connect({
         storyTitle: story.title,
         currentSentence,
-        onStatusChange: setConnectionStatus,
-        onMicChange: setMicEnabled,
+        onConnectionStatusChange: setConnectionStatus,
+        onMicStatusChange: setMicStatus,
         onDebugEvent: handleRealtimeDebug,
       });
-      appendLog('ui', 'AI tutor session started.');
+      await client.startMic();
+      appendLog('ui', 'AI tutor WebSocket session started.');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setErrorMessage(message);
+      setConnectionStatus('failed');
       appendLog('error', message);
+      client.close();
     }
   }
 
   function handleStop() {
-    realtimeClientRef.current?.stop();
+    realtimeClientRef.current?.close();
     appendLog('ui', 'Stopped the tutor session.');
   }
 
@@ -117,7 +124,7 @@ function App() {
       return;
     }
     try {
-      realtimeClientRef.current?.repeatCurrentSentence(currentSentence);
+      realtimeClientRef.current?.repeatSentence(currentSentence);
       appendLog('ui', `Asked AI to repeat: ${currentSentence}`);
     } catch (error) {
       setErrorMessage(String(error));
@@ -153,8 +160,7 @@ function App() {
 
     if (isConnected) {
       try {
-        realtimeClientRef.current?.sendSessionUpdate(nextSentence, story.title);
-        realtimeClientRef.current?.sendTextMessage(`Now move to the new sentence. Please read it once and ask one simple question: ${nextSentence}`);
+        realtimeClientRef.current?.updateSentence(story.title, nextSentence);
       } catch (error) {
         setErrorMessage(String(error));
         appendLog('error', String(error));
@@ -171,9 +177,9 @@ function App() {
     <main className="app-shell">
       <section className="hero-card">
         <div>
-          <p className="eyebrow">Realtime WebRTC Demo</p>
+          <p className="eyebrow">Realtime WebSocket Demo</p>
           <h1>AI English Reading Tutor Demo</h1>
-          <p className="subtitle">A simple H5 reading coach powered by a Java SDP proxy and Qwen3.5 Omni realtime voice.</p>
+          <p className="subtitle">A simple H5 reading coach powered by a Java WebSocket proxy and Qwen3.5 Omni realtime voice.</p>
         </div>
         <div className={`status-pill status-${connectionStatus}`}>{connectionStatus}</div>
       </section>
@@ -190,7 +196,7 @@ function App() {
 
           <div className="progress-row">
             <span>{progressLabel}</span>
-            <span>Microphone: {micEnabled ? 'enabled' : 'disabled'}</span>
+            <span>Microphone: {micStatus}</span>
           </div>
 
           <div className="page-card">
@@ -245,12 +251,12 @@ function App() {
               <dd>{connectionStatus}</dd>
             </div>
             <div>
-              <dt>DataChannel</dt>
-              <dd>{dataChannelState}</dd>
+              <dt>WebSocket</dt>
+              <dd>{webSocketState}</dd>
             </div>
             <div>
               <dt>Microphone</dt>
-              <dd>{micEnabled ? 'enabled' : 'disabled'}</dd>
+              <dd>{micStatus}</dd>
             </div>
           </dl>
 
