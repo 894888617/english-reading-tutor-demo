@@ -1,0 +1,9 @@
+server:
+  port: 8080
+
+aliyun:
+  dashscope:
+    api-key: ${DASHSCOPE_API_KEY:}
+    webrtc-endpoint: ${ALIYUN_WEBRTC_ENDPOINT:}
+    realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
+    voice: ${REALTIME_VOICE:Ethan}
