@@ -569,3 +569,148 @@ button.small {
     grid-template-columns: 1fr;
   }
 }
+
+.learning-section,
+.assessment-card {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #dce8f8;
+  border-radius: 18px;
+  background: #fbfdff;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.section-title-row h3,
+.assessment-card h3 {
+  margin: 0;
+  color: #1f2a44;
+}
+
+.voice-select {
+  max-width: 280px;
+}
+
+select {
+  width: 100%;
+  border: 1px solid #d0d7e2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #1f2a44;
+  background: #ffffff;
+  font: inherit;
+}
+
+.token-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.word-token {
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #111827;
+  font-size: 1.18rem;
+  box-shadow: inset 0 0 0 1px #dbe5f1;
+}
+
+.word-token.token-current {
+  background: #dbeafe;
+  color: #175cd3;
+  box-shadow: inset 0 0 0 2px #2f6fed;
+}
+
+.word-token.token-wrong {
+  color: #d92d20;
+  background: #fff7f7;
+  box-shadow: inset 0 0 0 2px #f97066;
+}
+
+.word-token.token-missed {
+  background: #fff2b8;
+  color: #7a4b00;
+  box-shadow: inset 0 0 0 2px #fdb022;
+}
+
+.word-token.token-extra {
+  background: #eef2f7;
+  color: #667085;
+  text-decoration: line-through;
+}
+
+.word-token.token-unclear {
+  color: #b54708;
+  text-decoration: underline wavy #f79009 2px;
+  text-underline-offset: 4px;
+}
+
+.word-meaning,
+.feedback-box {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eef8ff;
+  color: #175cd3;
+  font-weight: 800;
+}
+
+.total-score {
+  display: inline-flex;
+  width: fit-content;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: #2f6fed;
+  color: #ffffff;
+  font-size: 1.2rem;
+  font-weight: 900;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.score-grid span,
+.issue-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f7f9fc;
+  font-weight: 800;
+}
+
+.issue-list {
+  display: grid;
+  gap: 10px;
+}
+
+.issue-item {
+  display: grid;
+  gap: 6px;
+}
+
+.issue-item em {
+  color: #667085;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.session-row {
+  margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .score-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,3 +1,4 @@
+import type { ReadingAssessmentResult } from './analysis/pronunciationDiff';
 import type { Book, BookListItem, StoryResponse } from './story';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -94,6 +95,31 @@ export async function saveLog(log: TutorLog): Promise<{ success: boolean }> {
 
   if (!response.ok) {
     throw new Error(`保存对话记录失败： ${await parseError(response)}`);
+  }
+  return response.json();
+}
+
+export async function assessReading(input: {
+  audio: Blob;
+  targetText: string;
+  bookId?: string;
+  pageNo?: number;
+  sentenceIndex?: number;
+  recognizedText?: string;
+}): Promise<ReadingAssessmentResult> {
+  const form = new FormData();
+  const extension = input.audio.type.includes('wav') ? 'wav' : 'webm';
+  form.append('audio', input.audio, `reading.${extension}`);
+  form.append('targetText', input.targetText);
+  form.append('bookId', input.bookId ?? '');
+  form.append('pageNo', String(input.pageNo ?? 1));
+  form.append('sentenceIndex', String(input.sentenceIndex ?? 0));
+  if (input.recognizedText) {
+    form.append('recognizedText', input.recognizedText);
+  }
+  const response = await fetch(`${API_BASE_URL}/api/assessment/reading`, { method: 'POST', body: form });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
   }
   return response.json();
 }

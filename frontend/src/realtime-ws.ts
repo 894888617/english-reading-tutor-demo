@@ -1,10 +1,11 @@
+import type { ReadingAssessmentResult, VoiceStyle } from './analysis/pronunciationDiff';
 import type { Book, Sentence } from './story';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed';
 export type MicStatus = 'idle' | 'requesting' | 'recording' | 'stopped' | 'failed';
 
 export interface RealtimeDebugEvent {
-  kind: 'status' | 'websocket' | 'event' | 'text' | 'transcript' | 'audio' | 'error';
+  kind: 'system' | 'reading' | 'recording' | 'assessment' | 'correction' | 'status' | 'websocket' | 'event' | 'text' | 'transcript' | 'audio' | 'error';
   message: string;
   raw?: unknown;
 }
@@ -17,12 +18,21 @@ export interface RealtimeWsOptions {
   onConnectionStatusChange?: (status: ConnectionStatus) => void;
   onMicStatusChange?: (status: MicStatus) => void;
   onDebugEvent?: (event: RealtimeDebugEvent) => void;
+  voiceStyle?: VoiceStyle;
+  onPlaybackChange?: (playing: boolean) => void;
 }
 
+
 type ControlMessage =
-  | { type: 'start_lesson'; book: Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'>; pageNo: number; currentSentence: Sentence }
+  | { type: 'start_lesson'; book: Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'>; pageNo: number; currentSentence: Sentence; voiceStyle?: VoiceStyle }
+  | { type: 'session_update'; voiceStyle: VoiceStyle }
   | { type: 'update_sentence'; book: Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'>; pageNo: number; currentSentence: Sentence }
-  | { type: 'repeat_sentence'; currentSentence: Sentence }
+  | { type: 'read_page'; pageNo: number; sentences: string[]; speed: 'normal' | 'slow'; voiceStyle?: VoiceStyle }
+  | { type: 'read_sentence'; sentence: string; speed: 'normal' | 'slow'; voiceStyle?: VoiceStyle }
+  | { type: 'repeat_sentence'; sentence: string; currentSentence?: Sentence; voiceStyle?: VoiceStyle }
+  | { type: 'read_word'; word: string; sentence: string; voiceStyle?: VoiceStyle }
+  | { type: 'assessment_feedback'; result: ReadingAssessmentResult; voiceStyle?: VoiceStyle }
+  | { type: 'stop_playback' }
   | { type: 'stop' };
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -64,6 +74,7 @@ export class RealtimeWsClient {
           book: bookContext(options.book),
           pageNo: options.pageNo,
           currentSentence: options.currentSentence,
+          voiceStyle: options.voiceStyle,
         });
         resolve();
       };
@@ -133,8 +144,34 @@ export class RealtimeWsClient {
     this.sendControlMessage({ type: 'update_sentence', book: bookContext(book), pageNo, currentSentence });
   }
 
+  updateVoiceStyle(voiceStyle: VoiceStyle): void {
+    this.options = this.options ? { ...this.options, voiceStyle } : this.options;
+    this.sendControlMessage({ type: 'session_update', voiceStyle });
+  }
+
+  readPage(pageNo: number, sentences: string[], speed: 'normal' | 'slow' = 'normal'): void {
+    this.sendControlMessage({ type: 'read_page', pageNo, sentences, speed, voiceStyle: this.options?.voiceStyle });
+  }
+
+  readSentence(sentence: string, speed: 'normal' | 'slow' = 'normal'): void {
+    this.sendControlMessage({ type: 'read_sentence', sentence, speed, voiceStyle: this.options?.voiceStyle });
+  }
+
   repeatSentence(currentSentence: Sentence): void {
-    this.sendControlMessage({ type: 'repeat_sentence', currentSentence });
+    this.sendControlMessage({ type: 'repeat_sentence', sentence: currentSentence.english, currentSentence, voiceStyle: this.options?.voiceStyle });
+  }
+
+  readWord(word: string, sentence: string): void {
+    this.sendControlMessage({ type: 'read_word', word, sentence, voiceStyle: this.options?.voiceStyle });
+  }
+
+  sendAssessmentFeedback(result: ReadingAssessmentResult): void {
+    this.sendControlMessage({ type: 'assessment_feedback', result, voiceStyle: this.options?.voiceStyle });
+  }
+
+  stopPlayback(): void {
+    this.clearPlaybackQueue();
+    this.sendControlMessage({ type: 'stop_playback' });
   }
 
   close(): void {
@@ -170,7 +207,7 @@ export class RealtimeWsClient {
     while (this.pendingInputSamples.length >= CHUNK_SAMPLES) {
       const chunk = this.pendingInputSamples.splice(0, CHUNK_SAMPLES);
       this.ws.send(floatTo16BitPcm(chunk));
-      this.emitDebug('audio', `已发送音频片段：${CHUNK_SAMPLES} 个采样。`);
+
     }
   }
 
@@ -187,6 +224,16 @@ export class RealtimeWsClient {
     try {
       const event = JSON.parse(data);
       const type = event.type ?? 'unknown';
+      if (type === 'playback_started') {
+        this.options?.onPlaybackChange?.(true);
+        this.emitDebug('reading', event.message ?? 'AI 开始朗读。', event);
+        return;
+      }
+      if (type === 'playback_done') {
+        this.options?.onPlaybackChange?.(false);
+        this.emitDebug('reading', event.message ?? 'AI 朗读完成。', event);
+        return;
+      }
       if (type === 'ai_text_delta' && typeof event.text === 'string') {
         this.emitDebug('text', event.text, event);
         return;
@@ -237,7 +284,7 @@ export class RealtimeWsClient {
     source.start(startAt);
     this.nextPlaybackTime = startAt + audioBuffer.duration;
     this.playbackSources.push(source);
-    this.emitDebug('audio', `已加入 AI 语音播放队列：${samples.length} 个采样。`);
+
   }
 
   private getPlaybackContext(): AudioContext {
@@ -260,6 +307,7 @@ export class RealtimeWsClient {
       }
     });
     this.playbackSources = [];
+    this.options?.onPlaybackChange?.(false);
     this.nextPlaybackTime = 0;
     void this.playbackContext?.close().catch(() => undefined);
     this.playbackContext = undefined;

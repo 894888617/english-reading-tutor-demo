@@ -1,6 +1,7 @@
 package com.demo.readingtutor.ws;
 
 import com.demo.readingtutor.config.RealtimeProperties;
+import com.demo.readingtutor.config.TtsProperties;
 import com.demo.readingtutor.service.DashScopeRealtimeSession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,10 +25,12 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
 
     private final RealtimeProperties properties;
     private final ObjectMapper objectMapper;
+    private final TtsProperties ttsProperties;
     private final Map<String, DashScopeRealtimeSession> dashScopeSessions = new ConcurrentHashMap<>();
 
-    public RealtimeWebSocketHandler(RealtimeProperties properties, ObjectMapper objectMapper) {
+    public RealtimeWebSocketHandler(RealtimeProperties properties, TtsProperties ttsProperties, ObjectMapper objectMapper) {
         this.properties = properties;
+        this.ttsProperties = ttsProperties;
         this.objectMapper = objectMapper;
     }
 
@@ -35,6 +38,7 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession browserSession) {
         DashScopeRealtimeSession dashScopeSession = new DashScopeRealtimeSession(
                 properties,
+                ttsProperties,
                 objectMapper,
                 json -> sendText(browserSession, json),
                 audio -> sendBinary(browserSession, audio)
@@ -59,7 +63,20 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
                 case "start_lesson" -> dashScopeSession.startLesson(
                         payload.path("book"),
                         payload.path("pageNo").asInt(1),
-                        payload.path("currentSentence")
+                        payload.path("currentSentence"),
+                        payload.path("voiceStyle").asText("")
+                );
+                case "session_update" -> dashScopeSession.updateVoiceStyle(payload.path("voiceStyle").asText(""));
+                case "read_page" -> dashScopeSession.readPage(
+                        payload.path("pageNo").asInt(1),
+                        payload.path("sentences"),
+                        payload.path("speed").asText("normal"),
+                        payload.path("voiceStyle").asText("")
+                );
+                case "read_sentence" -> dashScopeSession.readSentence(
+                        payload.path("sentence").asText(""),
+                        payload.path("speed").asText("normal"),
+                        payload.path("voiceStyle").asText("")
                 );
                 case "update_sentence" -> dashScopeSession.updateSentence(
                         payload.path("book"),
@@ -67,9 +84,19 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
                         payload.path("currentSentence")
                 );
                 case "repeat_sentence" -> dashScopeSession.repeatSentence(
-                        payload.path("currentSentence").path("english").asText(""),
+                        payload.path("sentence").asText(payload.path("currentSentence").path("english").asText("")),
                         payload.path("currentSentence").path("chinese").asText("")
                 );
+                case "read_word" -> dashScopeSession.readWord(
+                        payload.path("word").asText(""),
+                        payload.path("sentence").asText(""),
+                        payload.path("voiceStyle").asText("")
+                );
+                case "assessment_feedback" -> dashScopeSession.assessmentFeedback(
+                        payload.path("result"),
+                        payload.path("voiceStyle").asText("")
+                );
+                case "stop_playback" -> dashScopeSession.stopPlayback();
                 case "stop" -> {
                     dashScopeSession.close();
                     sendJson(browserSession, Map.of("type", "status", "message", "已结束会话。"));

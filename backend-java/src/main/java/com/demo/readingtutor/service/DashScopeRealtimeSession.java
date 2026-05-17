@@ -1,6 +1,7 @@
 package com.demo.readingtutor.service;
 
 import com.demo.readingtutor.config.RealtimeProperties;
+import com.demo.readingtutor.config.TtsProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +28,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
 
     private final RealtimeProperties properties;
     private final ObjectMapper objectMapper;
+    private final TtsProperties ttsProperties;
     private final Consumer<String> jsonToBrowser;
     private final Consumer<byte[]> audioToBrowser;
     private final HttpClient httpClient;
@@ -41,14 +43,17 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     private volatile String currentSentenceEnglish = "";
     private volatile String currentSentenceChinese = "";
     private volatile String currentKeywords = "";
+    private volatile String voiceStyle = "";
 
     public DashScopeRealtimeSession(
             RealtimeProperties properties,
+            TtsProperties ttsProperties,
             ObjectMapper objectMapper,
             Consumer<String> jsonToBrowser,
             Consumer<byte[]> audioToBrowser
     ) {
         this.properties = properties;
+        this.ttsProperties = ttsProperties;
         this.objectMapper = objectMapper;
         this.jsonToBrowser = jsonToBrowser;
         this.audioToBrowser = audioToBrowser;
@@ -117,7 +122,8 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         sendBrowserError("百炼实时语音 WebSocket 错误：" + error.getMessage());
     }
 
-    public void startLesson(JsonNode book, int pageNo, JsonNode currentSentence) {
+    public void startLesson(JsonNode book, int pageNo, JsonNode currentSentence, String voiceStyle) {
+        updateVoiceStyle(voiceStyle);
         updateContext(book, pageNo, currentSentence);
         sendSessionUpdate();
         sendTextInstruction(INTRO_PROMPT);
@@ -129,12 +135,59 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         sendTextInstruction("我们进入下一句。请先听我读一遍，再用中文解释意思，并带我跟读：" + this.currentSentenceEnglish);
     }
 
+    public void updateVoiceStyle(String voiceStyle) {
+        if (StringUtils.hasText(voiceStyle)) {
+            this.voiceStyle = voiceStyle;
+            sendSessionUpdate();
+        }
+    }
+
+    public void readPage(int pageNo, JsonNode sentencesNode, String speed, String voiceStyle) {
+        updateVoiceStyle(voiceStyle);
+        this.pageNo = pageNo <= 0 ? this.pageNo : pageNo;
+        StringBuilder sentences = new StringBuilder();
+        if (sentencesNode != null && sentencesNode.isArray()) {
+            for (JsonNode sentence : sentencesNode) {
+                String text = sentence.asText("").trim();
+                if (StringUtils.hasText(text)) {
+                    sentences.append(text).append("\n");
+                }
+            }
+        }
+        sendTextInstruction("请使用专业外教声音，按顺序朗读当前页所有英文句子。只朗读英文，不要加入中文解释。每句之间停顿 0.8 秒。\n" + sentences);
+    }
+
+    public void readSentence(String sentence, String speed, String voiceStyle) {
+        updateVoiceStyle(voiceStyle);
+        String target = StringUtils.hasText(sentence) ? sentence.trim() : this.currentSentenceEnglish;
+        if ("slow".equalsIgnoreCase(speed)) {
+            sendTextInstruction("请用比正常语速更慢、更清晰的专业外教发音朗读这个英文句子，只朗读英文，不要解释：" + target);
+        } else {
+            sendTextInstruction("请用专业外教发音清晰朗读这个英文句子，只朗读英文，不要解释：" + target);
+        }
+    }
+
     public void repeatSentence(String currentSentenceEnglish, String currentSentenceChinese) {
         String sentence = StringUtils.hasText(currentSentenceEnglish) ? currentSentenceEnglish : this.currentSentenceEnglish;
         if (StringUtils.hasText(currentSentenceChinese)) {
             this.currentSentenceChinese = currentSentenceChinese;
         }
-        sendTextInstruction("请重新朗读这个英文句子，并用中文提醒我跟读：" + sentence);
+        sendTextInstruction("请只重复朗读这个英文句子，不要中文解释，不要重新讲解：" + sentence);
+    }
+
+    public void readWord(String word, String sentence, String voiceStyle) {
+        updateVoiceStyle(voiceStyle);
+        sendTextInstruction("请用专业外教发音清晰朗读这个英文单词，只读单词本身，不要解释：" + word);
+    }
+
+    public void assessmentFeedback(JsonNode result, String voiceStyle) {
+        updateVoiceStyle(voiceStyle);
+        sendTextInstruction("请用中文给 6-10 岁孩子做简短反馈：先鼓励；指出最多 2 个最重要的问题；给出具体改进建议；示范要练习的英文单词或短语；不要说太长；不要批评孩子。评测结果：" + result.toString());
+    }
+
+    public void stopPlayback() {
+        sendDashScopeJson(Map.of("type", "response.cancel"));
+        sendBrowserJson(Map.of("type", "playback_done", "message", "已暂停播放。"));
     }
 
     private void updateContext(JsonNode book, int pageNo, JsonNode currentSentence) {
@@ -159,6 +212,8 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         if (!StringUtils.hasText(text)) {
             return;
         }
+        sendBrowserJson(Map.of("type", "playback_started", "message", "AI 开始朗读。"));
+        sendDashScopeJson(Map.of("type", "response.cancel"));
         sendDashScopeJson(Map.of(
                 "type", "conversation.item.create",
                 "item", Map.of(
@@ -187,7 +242,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                 "type", "session.update",
                 "session", Map.of(
                         "modalities", List.of("text", "audio"),
-                        "voice", properties.getVoice(),
+                        "voice", ttsProperties.resolveVoice(voiceStyle, properties.getVoice()),
                         "input_audio_format", "pcm",
                         "output_audio_format", "pcm",
                         "instructions", buildTutorInstructions(),
@@ -290,6 +345,10 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
             }
             if ("response.audio_transcript.done".equals(type)) {
                 sendBrowserJson(Map.of("type", "ai_text_done", "text", event.path("transcript").asText(event.path("text").asText(""))));
+                return;
+            }
+            if ("response.done".equals(type)) {
+                sendBrowserJson(Map.of("type", "playback_done", "message", "AI 朗读完成。"));
                 return;
             }
             if ("error".equals(type) || event.has("error")) {
