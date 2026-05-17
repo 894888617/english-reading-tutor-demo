@@ -1,3 +1,5 @@
+import type { Sentence } from './story';
+
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed';
 export type MicStatus = 'idle' | 'requesting' | 'recording' | 'stopped' | 'failed';
 
@@ -9,7 +11,8 @@ export interface RealtimeDebugEvent {
 
 export interface RealtimeWsOptions {
   storyTitle: string;
-  currentSentence: string;
+  englishTitle: string;
+  currentSentence: Sentence;
   url?: string;
   onConnectionStatusChange?: (status: ConnectionStatus) => void;
   onMicStatusChange?: (status: MicStatus) => void;
@@ -17,9 +20,9 @@ export interface RealtimeWsOptions {
 }
 
 type ControlMessage =
-  | { type: 'start_lesson'; storyTitle: string; currentSentence: string }
-  | { type: 'update_sentence'; storyTitle: string; currentSentence: string }
-  | { type: 'repeat_sentence'; currentSentence: string }
+  | { type: 'start_lesson'; storyTitle: string; englishTitle: string; currentSentence: Sentence }
+  | { type: 'update_sentence'; storyTitle: string; englishTitle: string; currentSentence: Sentence }
+  | { type: 'repeat_sentence'; currentSentence: Sentence }
   | { type: 'stop' };
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -48,17 +51,18 @@ export class RealtimeWsClient {
       ws.binaryType = 'arraybuffer';
 
       const timeoutId = window.setTimeout(() => {
-        reject(new Error('Timed out connecting to Java realtime WebSocket.'));
+        reject(new Error('连接 Java 实时语音 WebSocket 超时。'));
         ws.close();
       }, 15000);
 
       ws.onopen = () => {
         window.clearTimeout(timeoutId);
-        this.emitDebug('websocket', `Connected to ${url}`);
+        this.emitDebug('websocket', `已连接到 Java 后端：${url}`);
         this.emitConnectionStatus('connected');
         this.sendControlMessage({
           type: 'start_lesson',
           storyTitle: options.storyTitle,
+          englishTitle: options.englishTitle,
           currentSentence: options.currentSentence,
         });
         resolve();
@@ -66,10 +70,10 @@ export class RealtimeWsClient {
       ws.onerror = () => {
         window.clearTimeout(timeoutId);
         this.emitConnectionStatus('failed');
-        reject(new Error('Browser WebSocket connection failed. Is the Java backend running on port 8080?'));
+        reject(new Error('浏览器 WebSocket 连接失败，请确认 Java 后端已在 8080 端口启动。'));
       };
       ws.onclose = () => {
-        this.emitDebug('websocket', 'Browser WebSocket closed.');
+        this.emitDebug('websocket', '浏览器 WebSocket 已关闭。');
         this.stopMic();
         this.clearPlaybackQueue();
         this.emitConnectionStatus('closed');
@@ -80,7 +84,7 @@ export class RealtimeWsClient {
 
   async startMic(): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Cannot start microphone before WebSocket is connected.');
+      throw new Error('WebSocket 连接成功后才能开启麦克风。');
     }
 
     this.emitMicStatus('requesting');
@@ -93,10 +97,10 @@ export class RealtimeWsClient {
       this.micSource.connect(this.processor);
       this.processor.connect(this.audioContext.destination);
       this.emitMicStatus('recording');
-      this.emitDebug('status', 'Microphone started; streaming 16 kHz PCM chunks to Java backend.');
+      this.emitDebug('status', '麦克风已开启，正在向 Java 后端发送 16 kHz PCM 音频。');
     } catch (error) {
       this.emitMicStatus('failed');
-      this.emitDebug('error', `Microphone permission or capture failed: ${String(error)}`);
+      this.emitDebug('error', `麦克风授权或采集失败：${String(error)}`);
       this.stopMic(false);
       throw error;
     }
@@ -119,17 +123,17 @@ export class RealtimeWsClient {
 
   sendControlMessage(message: ControlMessage): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Realtime WebSocket is not open.');
+      throw new Error('实时语音 WebSocket 尚未打开。');
     }
     this.ws.send(JSON.stringify(message));
-    this.emitDebug('websocket', `Sent control message: ${message.type}`, message);
+    this.emitDebug('websocket', `已发送控制消息：${message.type}`, message);
   }
 
-  updateSentence(storyTitle: string, currentSentence: string): void {
-    this.sendControlMessage({ type: 'update_sentence', storyTitle, currentSentence });
+  updateSentence(storyTitle: string, englishTitle: string, currentSentence: Sentence): void {
+    this.sendControlMessage({ type: 'update_sentence', storyTitle, englishTitle, currentSentence });
   }
 
-  repeatSentence(currentSentence: string): void {
+  repeatSentence(currentSentence: Sentence): void {
     this.sendControlMessage({ type: 'repeat_sentence', currentSentence });
   }
 
@@ -139,7 +143,7 @@ export class RealtimeWsClient {
         this.sendControlMessage({ type: 'stop' });
       }
     } catch (error) {
-      this.emitDebug('error', `Failed to send stop message: ${String(error)}`);
+      this.emitDebug('error', `发送结束会话消息失败：${String(error)}`);
     }
     this.stopMic();
     this.clearPlaybackQueue();
@@ -149,9 +153,9 @@ export class RealtimeWsClient {
 
   getWebSocketState(): string {
     if (!this.ws) {
-      return 'not-created';
+      return '未创建';
     }
-    return ['connecting', 'open', 'closing', 'closed'][this.ws.readyState] ?? String(this.ws.readyState);
+    return ['连接中', '已打开', '关闭中', '已关闭'][this.ws.readyState] ?? String(this.ws.readyState);
   }
 
   private handleMicAudio(inputBuffer: AudioBuffer): void {
@@ -166,7 +170,7 @@ export class RealtimeWsClient {
     while (this.pendingInputSamples.length >= CHUNK_SAMPLES) {
       const chunk = this.pendingInputSamples.splice(0, CHUNK_SAMPLES);
       this.ws.send(floatTo16BitPcm(chunk));
-      this.emitDebug('audio', `Sent PCM audio chunk: ${CHUNK_SAMPLES} samples.`);
+      this.emitDebug('audio', `已发送音频片段：${CHUNK_SAMPLES} 个采样。`);
     }
   }
 
@@ -188,25 +192,25 @@ export class RealtimeWsClient {
         return;
       }
       if (type === 'ai_text_done' && typeof event.text === 'string') {
-        this.emitDebug('text', event.text || '[AI text completed]', event);
+        this.emitDebug('text', event.text || 'AI 老师回复完成。', event);
         return;
       }
       if (type === 'error') {
-        this.emitDebug('error', event.message ?? 'Unknown realtime error.', event);
+        this.emitDebug('error', event.message ?? '未知实时语音错误。', event);
         return;
       }
       if (type === 'dashscope_event') {
         const innerType = event.event?.type ?? 'unknown';
-        this.emitDebug('event', `DashScope event: ${innerType}`, event.event);
+        this.emitDebug('event', `模型事件：${innerType}`, event.event);
         const transcript = event.event?.transcript ?? event.event?.item?.content?.[0]?.transcript;
         if (typeof transcript === 'string' && transcript) {
-          this.emitDebug('transcript', `Student transcript: ${transcript}`, event.event);
+          this.emitDebug('transcript', transcript, event.event);
         }
         return;
       }
-      this.emitDebug('status', event.message ?? `Realtime event: ${type}`, event);
+      this.emitDebug('status', event.message ?? `实时事件：${type}`, event);
     } catch (error) {
-      this.emitDebug('event', `Non-JSON WebSocket message: ${String(data)}`, error);
+      this.emitDebug('event', `收到非 JSON WebSocket 消息：${String(data)}`, error);
     }
   }
 
@@ -233,7 +237,7 @@ export class RealtimeWsClient {
     source.start(startAt);
     this.nextPlaybackTime = startAt + audioBuffer.duration;
     this.playbackSources.push(source);
-    this.emitDebug('audio', `Queued AI PCM audio chunk: ${samples.length} samples.`);
+    this.emitDebug('audio', `已加入 AI 语音播放队列：${samples.length} 个采样。`);
   }
 
   private getPlaybackContext(): AudioContext {

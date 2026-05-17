@@ -40,7 +40,7 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
                 audio -> sendBinary(browserSession, audio)
         );
         dashScopeSessions.put(browserSession.getId(), dashScopeSession);
-        sendJson(browserSession, Map.of("type", "status", "message", "browser_connected"));
+        sendJson(browserSession, Map.of("type", "status", "message", "已连接到 Java 后端。"));
         dashScopeSession.connect();
     }
 
@@ -48,7 +48,7 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
     protected void handleTextMessage(WebSocketSession browserSession, TextMessage message) {
         DashScopeRealtimeSession dashScopeSession = dashScopeSessions.get(browserSession.getId());
         if (dashScopeSession == null) {
-            sendJson(browserSession, Map.of("type", "error", "message", "Realtime session was not initialized."));
+            sendJson(browserSession, Map.of("type", "error", "message", "实时语音会话尚未初始化。"));
             return;
         }
 
@@ -58,23 +58,30 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
             switch (type) {
                 case "start_lesson" -> dashScopeSession.startLesson(
                         payload.path("storyTitle").asText(""),
-                        payload.path("currentSentence").asText("")
+                        payload.path("englishTitle").asText(""),
+                        payload.path("currentSentence").path("english").asText(""),
+                        payload.path("currentSentence").path("chinese").asText("")
                 );
                 case "update_sentence" -> dashScopeSession.updateSentence(
                         payload.path("storyTitle").asText(""),
-                        payload.path("currentSentence").asText("")
+                        payload.path("englishTitle").asText(""),
+                        payload.path("currentSentence").path("english").asText(""),
+                        payload.path("currentSentence").path("chinese").asText("")
                 );
-                case "repeat_sentence" -> dashScopeSession.repeatSentence(payload.path("currentSentence").asText(""));
+                case "repeat_sentence" -> dashScopeSession.repeatSentence(
+                        payload.path("currentSentence").path("english").asText(""),
+                        payload.path("currentSentence").path("chinese").asText("")
+                );
                 case "stop" -> {
                     dashScopeSession.close();
-                    sendJson(browserSession, Map.of("type", "status", "message", "stopped"));
+                    sendJson(browserSession, Map.of("type", "status", "message", "已结束会话。"));
                     browserSession.close(CloseStatus.NORMAL);
                 }
-                default -> sendJson(browserSession, Map.of("type", "error", "message", "Unsupported control message type: " + type));
+                default -> sendJson(browserSession, Map.of("type", "error", "message", "不支持的控制消息类型：" + type));
             }
         } catch (Exception ex) {
             log.warn("Failed to handle browser realtime control message", ex);
-            sendJson(browserSession, Map.of("type", "error", "message", "Invalid control message: " + ex.getMessage()));
+            sendJson(browserSession, Map.of("type", "error", "message", "控制消息格式不正确：" + ex.getMessage()));
         }
     }
 

@@ -1,6 +1,6 @@
-# English Reading Tutor Demo
+# AI 英语阅读导师演示
 
-H5 实时语音外教 Demo：浏览器展示英文绘本句子，点击 **Start Tutor** 后通过浏览器麦克风采集 16 kHz、16 bit、单声道 PCM 音频，经 Java Spring Boot 后端 WebSocket 代理转发到阿里云百炼 Qwen3.5-Omni-Plus-Realtime，并将阿里云返回的文本事件与 PCM 音频转发回浏览器播放。
+H5 实时语音中文讲解式英语阅读练习 Demo：浏览器展示英文绘本句子与中文释义，点击 **开始陪练** 后通过浏览器麦克风采集 16 kHz、16 bit、单声道 PCM 音频，经 Java Spring Boot 后端 WebSocket 代理转发到阿里云百炼 Qwen3.5-Omni-Plus-Realtime。AI 默认使用中文讲解、鼓励和纠错，英文只用于朗读、带读、单词示范和简单练习。
 
 当前版本使用 **WebSocket 代理模式**，不使用 WebRTC，不创建 Offer SDP，不做 SDP 交换，也不需要 `ALIYUN_WEBRTC_ENDPOINT`。
 
@@ -75,6 +75,7 @@ english-reading-tutor-demo/
 │     │  └─ dto/
 │     │     ├─ StoryResponse.java
 │     │     ├─ StoryPage.java
+│     │     ├─ StorySentence.java
 │     │     └─ LogRequest.java
 │     └─ resources/application.yml
 └─ README.md
@@ -155,15 +156,37 @@ http://localhost:5173
 前端发送 JSON 控制消息：
 
 ```json
-{ "type": "start_lesson", "storyTitle": "小兔子", "currentSentence": "小兔子在找他的红帽子。" }
+{
+  "type": "start_lesson",
+  "storyTitle": "小兔子",
+  "englishTitle": "The Little Rabbit",
+  "currentSentence": {
+    "english": "The little rabbit is looking for his red hat.",
+    "chinese": "小兔子正在找他的红帽子。"
+  }
+}
 ```
 
 ```json
-{ "type": "update_sentence", "storyTitle": "小兔子", "currentSentence": "他问鸟儿，你见过我的帽子吗？" }
+{
+  "type": "update_sentence",
+  "storyTitle": "小兔子",
+  "englishTitle": "The Little Rabbit",
+  "currentSentence": {
+    "english": "He asks the bird, have you seen my hat?",
+    "chinese": "他问鸟儿：你见过我的帽子吗？"
+  }
+}
 ```
 
 ```json
-{ "type": "repeat_sentence", "currentSentence": "小兔子在找他的红帽子。" }
+{
+  "type": "repeat_sentence",
+  "currentSentence": {
+    "english": "The little rabbit is looking for his red hat.",
+    "chinese": "小兔子正在找他的红帽子。"
+  }
+}
 ```
 
 ```json
@@ -178,7 +201,7 @@ http://localhost:5173
 
 后端发送 JSON 消息：
 
-- `{ "type": "status", "message": "connected_to_dashscope" }`
+- `{ "type": "status", "message": "已连接到百炼实时语音模型。" }`
 - `{ "type": "dashscope_event", "event": { } }`
 - `{ "type": "ai_text_delta", "text": "..." }`
 - `{ "type": "ai_text_done", "text": "..." }`
@@ -224,12 +247,12 @@ http://localhost:5173
 
 6. 打开浏览器访问 `http://localhost:5173`。
 7. 确认页面展示绘本标题、等级、当前页、当前句子和调试区。
-8. 点击 `Start Tutor`，允许浏览器麦克风权限。
+8. 点击“开始陪练”，允许浏览器麦克风权限。
 9. 观察调试区：应看到浏览器 WebSocket 连接、后端连接阿里云、`session.update`、音频 chunk 发送、阿里云事件和 AI 文本增量。
-10. 听 AI 外教朗读当前句子并提问；用英语语音回答或提问。
-11. 点击 `Repeat Reading`，AI 应重新慢速清晰朗读当前句子。
-12. 点击 `Next Sentence`，页面高亮更新，前端发送 `update_sentence`，Java 后端发送新的 `session.update`，AI 围绕新句子继续。
-13. 点击 `Stop Session`，确认麦克风释放、播放队列清理、浏览器 WebSocket 和阿里云 WebSocket 关闭。
+10. 听 AI 老师先用中文说明当前句子，再朗读英文、解释中文意思、拆解重点词并带读。
+11. 点击“重复朗读”，AI 应重新朗读英文句子，并用中文提醒学生跟读。
+12. 点击“下一句”，页面高亮更新，前端发送 `update_sentence`，Java 后端发送新的中文教学 `session.update`，AI 围绕新句子继续。
+13. 点击“结束会话”，确认麦克风释放、播放队列清理、浏览器 WebSocket 和阿里云 WebSocket 关闭。
 
 ## 常见问题
 
@@ -256,4 +279,4 @@ API Key 属于服务端密钥。前端只发送控制消息和 PCM 音频给 Jav
 
 ### 4. AI 回答跑题怎么办？
 
-开始课程和切换句子时，Java 后端都会发送 `session.update`，其中 `instructions` 明确要求 AI 只围绕当前绘本和当前句子讲解、提问、纠错，不做开放闲聊。
+开始课程和切换句子时，Java 后端都会发送中文教学 `session.update`，其中 `instructions` 明确要求 AI 主要使用中文，按“中文说明当前句子 → 朗读英文 → 中文解释 → 讲重点词 → 带读 → 问一个简单问题”的流程教学，只围绕当前绘本和当前句子讲解、提问、纠错，不做开放闲聊。

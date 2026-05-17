@@ -4,14 +4,16 @@ import java.util.List;
 
 public class StoryResponse {
     private String title;
+    private String englishTitle;
     private String level;
     private List<StoryPage> pages;
 
     public StoryResponse() {
     }
 
-    public StoryResponse(String title, String level, List<StoryPage> pages) {
+    public StoryResponse(String title, String englishTitle, String level, List<StoryPage> pages) {
         this.title = title;
+        this.englishTitle = englishTitle;
         this.level = level;
         this.pages = pages;
     }
@@ -22,6 +24,14 @@ public class StoryResponse {
 
     public void setTitle(String title) {
         this.title = title;
+    }
+
+    public String getEnglishTitle() {
+        return englishTitle;
+    }
+
+    public void setEnglishTitle(String englishTitle) {
+        this.englishTitle = englishTitle;
     }
 
     public String getLevel() {

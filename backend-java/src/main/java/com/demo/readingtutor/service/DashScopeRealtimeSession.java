@@ -23,7 +23,7 @@ import java.util.function.Consumer;
 
 public class DashScopeRealtimeSession implements WebSocket.Listener {
     private static final Logger log = LoggerFactory.getLogger(DashScopeRealtimeSession.class);
-    private static final String INTRO_PROMPT = "Please start the reading lesson. Read the current sentence first, then ask me one simple question.";
+    private static final String INTRO_PROMPT = "请开始这节英语阅读课。请用中文讲解当前英文句子，先朗读英文句子，再解释中文意思，然后带我跟读。";
 
     private final RealtimeProperties properties;
     private final ObjectMapper objectMapper;
@@ -35,7 +35,9 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     private final ConcurrentLinkedQueue<String> pendingOutboundMessages = new ConcurrentLinkedQueue<>();
     private volatile WebSocket webSocket;
     private volatile String storyTitle = "";
-    private volatile String currentSentence = "";
+    private volatile String englishTitle = "";
+    private volatile String currentSentenceEnglish = "";
+    private volatile String currentSentenceChinese = "";
 
     public DashScopeRealtimeSession(
             RealtimeProperties properties,
@@ -54,7 +56,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
 
     public void connect() {
         if (!properties.hasApiKey()) {
-            sendBrowserError("DASHSCOPE_API_KEY is not configured. Set it before starting the backend.");
+            sendBrowserError("未配置 DASHSCOPE_API_KEY，请先设置后端环境变量。");
             return;
         }
         URI uri = UriComponentsBuilder.fromUriString(properties.getRealtimeWsUrl())
@@ -69,7 +71,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                 .whenComplete((socket, error) -> {
                     if (error != null) {
                         log.warn("Failed to connect to DashScope realtime WebSocket", error);
-                        sendBrowserError("Failed to connect to DashScope realtime WebSocket: " + error.getMessage());
+                        sendBrowserError("连接百炼实时语音模型失败：" + error.getMessage());
                     } else {
                         this.webSocket = socket;
                     }
@@ -80,7 +82,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     public void onOpen(WebSocket webSocket) {
         this.webSocket = webSocket;
         open.set(true);
-        sendBrowserJson(Map.of("type", "status", "message", "connected_to_dashscope"));
+        sendBrowserJson(Map.of("type", "status", "message", "已连接到百炼实时语音模型。"));
         sendSessionUpdate();
         flushPendingMessages();
         WebSocket.Listener.super.onOpen(webSocket);
@@ -101,7 +103,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     @Override
     public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
         open.set(false);
-        sendBrowserJson(Map.of("type", "status", "message", "dashscope_closed", "code", statusCode, "reason", reason));
+        sendBrowserJson(Map.of("type", "status", "message", "百炼实时语音连接已关闭。", "code", statusCode, "reason", reason));
         return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
     }
 
@@ -109,26 +111,33 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     public void onError(WebSocket webSocket, Throwable error) {
         open.set(false);
         log.warn("DashScope realtime WebSocket error", error);
-        sendBrowserError("DashScope realtime WebSocket error: " + error.getMessage());
+        sendBrowserError("百炼实时语音 WebSocket 错误：" + error.getMessage());
     }
 
-    public void startLesson(String storyTitle, String currentSentence) {
+    public void startLesson(String storyTitle, String englishTitle, String currentSentenceEnglish, String currentSentenceChinese) {
         this.storyTitle = storyTitle == null ? "" : storyTitle;
-        this.currentSentence = currentSentence == null ? "" : currentSentence;
+        this.englishTitle = englishTitle == null ? "" : englishTitle;
+        this.currentSentenceEnglish = currentSentenceEnglish == null ? "" : currentSentenceEnglish;
+        this.currentSentenceChinese = currentSentenceChinese == null ? "" : currentSentenceChinese;
         sendSessionUpdate();
         sendTextInstruction(INTRO_PROMPT);
     }
 
-    public void updateSentence(String storyTitle, String currentSentence) {
+    public void updateSentence(String storyTitle, String englishTitle, String currentSentenceEnglish, String currentSentenceChinese) {
         this.storyTitle = storyTitle == null ? this.storyTitle : storyTitle;
-        this.currentSentence = currentSentence == null ? "" : currentSentence;
+        this.englishTitle = englishTitle == null ? this.englishTitle : englishTitle;
+        this.currentSentenceEnglish = currentSentenceEnglish == null ? "" : currentSentenceEnglish;
+        this.currentSentenceChinese = currentSentenceChinese == null ? "" : currentSentenceChinese;
         sendSessionUpdate();
-        sendTextInstruction("Now move to the new sentence. Please read it once and ask one simple question: " + this.currentSentence);
+        sendTextInstruction("我们进入下一句。请先听我读一遍，再用中文解释意思，并带我跟读：" + this.currentSentenceEnglish);
     }
 
-    public void repeatSentence(String currentSentence) {
-        String sentence = StringUtils.hasText(currentSentence) ? currentSentence : this.currentSentence;
-        sendTextInstruction("Please read the current sentence slowly and clearly: " + sentence);
+    public void repeatSentence(String currentSentenceEnglish, String currentSentenceChinese) {
+        String sentence = StringUtils.hasText(currentSentenceEnglish) ? currentSentenceEnglish : this.currentSentenceEnglish;
+        if (StringUtils.hasText(currentSentenceChinese)) {
+            this.currentSentenceChinese = currentSentenceChinese;
+        }
+        sendTextInstruction("请重新朗读这个英文句子，并用中文提醒我跟读：" + sentence);
     }
 
     public void sendAudio(byte[] pcmBytes) {
@@ -180,17 +189,70 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                                 "threshold", 0.5,
                                 "silence_duration_ms", 800
                         ),
-                        "temperature", 0.7
+                        "temperature", 0.6
                 )
         ));
     }
 
     private String buildTutorInstructions() {
-        return "You are an English reading tutor for Chinese children aged 6-10. "
-                + "Help the student read the current story sentence by sentence. Read clearly, explain difficult words, "
-                + "ask one simple question at a time, correct mistakes gently, and encourage the student. Use simple English. "
-                + "If the student does not understand, explain briefly in Chinese. Stay focused on the current story. "
-                + "Current story: " + safe(storyTitle) + ". Current sentence: " + safe(currentSentence);
+        return buildTutorInstructions(
+                storyTitle,
+                englishTitle,
+                currentSentenceEnglish,
+                currentSentenceChinese
+        );
+    }
+
+    private String buildTutorInstructions(
+            String storyTitle,
+            String englishTitle,
+            String currentSentenceEnglish,
+            String currentSentenceChinese
+    ) {
+        return "你是一名中文授课的少儿英语阅读老师，正在带 6-10 岁中国孩子阅读英文绘本。\n\n"
+                + "你的教学语言：\n"
+                + "- 默认使用中文讲解。\n"
+                + "- 英文只用于朗读、跟读示范、单词示范和简单练习。\n"
+                + "- 不要长时间全英文输出。\n"
+                + "- 不要开放闲聊。\n"
+                + "- 不要讲复杂语法。\n\n"
+                + "当前故事中文名：\n" + safe(storyTitle) + "\n\n"
+                + "当前故事英文名：\n" + safe(englishTitle) + "\n\n"
+                + "当前英文句子：\n" + safe(currentSentenceEnglish) + "\n\n"
+                + "当前中文意思：\n" + safe(currentSentenceChinese) + "\n\n"
+                + "你的任务：\n"
+                + "1. 用中文告诉学生现在学习哪一句。\n"
+                + "2. 清晰朗读英文句子。\n"
+                + "3. 用中文解释这句话的意思。\n"
+                + "4. 挑出 1-2 个重点英文单词，用中文解释。\n"
+                + "5. 带学生跟读英文句子。\n"
+                + "6. 问一个非常简单的理解问题。\n"
+                + "7. 学生回答错误时，先鼓励，再用中文纠正。\n"
+                + "8. 学生读音不清楚时，温和提醒，并给出正确示范。\n"
+                + "9. 每次回答要短，不要一次讲太多。\n"
+                + "10. 一次只问一个问题。\n\n"
+                + "回答风格：\n"
+                + "- 像耐心的中文英语老师。\n"
+                + "- 语言简单。\n"
+                + "- 语气鼓励。\n"
+                + "- 适合小学生。\n"
+                + "- 不要说太长。\n"
+                + "- 不要输出与当前绘本无关的内容。\n\n"
+                + "推荐教学话术：\n"
+                + "- “我们先来看这一句……”\n"
+                + "- “这句话的意思是……”\n"
+                + "- “这个单词的意思是……”\n"
+                + "- “请跟我读……”\n"
+                + "- “很好，再来一遍。”\n"
+                + "- “没关系，我们慢慢来。”\n"
+                + "- “我问你一个小问题……”\n"
+                + "- “你可以这样回答……”\n\n"
+                + "限制：\n"
+                + "- 不要变成纯聊天。\n"
+                + "- 不要讲和绘本无关的内容。\n"
+                + "- 不要一次提多个问题。\n"
+                + "- 不要输出大段英文解释。\n"
+                + "- 不要让孩子感到被批评。";
     }
 
     private String safe(String value) {
@@ -224,7 +286,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
             sendBrowserJson(Map.of("type", "dashscope_event", "event", event));
         } catch (Exception ex) {
             log.warn("Failed to parse DashScope realtime message: {}", message, ex);
-            sendBrowserError("Failed to parse DashScope message: " + ex.getMessage());
+            sendBrowserError("解析百炼消息失败：" + ex.getMessage());
         }
     }
 
@@ -237,7 +299,7 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
             }
             webSocket.sendText(json, true);
         } catch (JsonProcessingException ex) {
-            sendBrowserError("Failed to serialize DashScope event: " + ex.getMessage());
+            sendBrowserError("序列化百炼事件失败：" + ex.getMessage());
         }
     }
 

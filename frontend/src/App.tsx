@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getStory, saveLog } from './api';
 import { RealtimeWsClient, type ConnectionStatus, type MicStatus, type RealtimeDebugEvent } from './realtime-ws';
-import { fallbackStory, type StoryResponse } from './story';
+import { fallbackStory, type Sentence, type StoryResponse } from './story';
 
 type DebugLog = {
   id: number;
@@ -10,8 +10,59 @@ type DebugLog = {
   message: string;
 };
 
+type Keyword = {
+  word: string;
+  meaning: string;
+};
+
+const connectionStatusLabels: Record<ConnectionStatus, string> = {
+  idle: '未开始',
+  connecting: '连接中',
+  connected: '已连接',
+  failed: '失败',
+  closed: '已关闭',
+};
+
+const micStatusLabels: Record<MicStatus, string> = {
+  idle: '未开始',
+  requesting: '请求权限中',
+  recording: '录音中',
+  stopped: '已停止',
+  failed: '失败',
+};
+
+const logKindLabels: Record<DebugLog['kind'], string> = {
+  ui: '系统',
+  status: '状态',
+  websocket: '状态',
+  event: '模型事件',
+  text: 'AI 老师',
+  transcript: '学生',
+  audio: '音频',
+  error: '错误',
+};
+
 function nowLabel(): string {
   return new Date().toLocaleTimeString();
+}
+
+function getKeywords(sentence?: Sentence): Keyword[] {
+  if (!sentence) {
+    return [];
+  }
+
+  const text = sentence.english.toLowerCase();
+  const candidates: Keyword[] = [
+    { word: 'rabbit', meaning: '小兔子' },
+    { word: 'red hat', meaning: '红帽子' },
+    { word: 'looking for', meaning: '正在寻找' },
+    { word: 'bird', meaning: '鸟儿' },
+    { word: 'under the tree', meaning: '在树下面' },
+    { word: 'finds', meaning: '找到了' },
+    { word: 'asks', meaning: '询问' },
+  ];
+
+  return candidates.filter((item) => text.includes(item.word)).slice(0, 2);
 }
 
 function App() {
@@ -29,12 +80,12 @@ function App() {
     getStory()
       .then((loadedStory) => {
         setStory(loadedStory);
-        appendLog('ui', `Story loaded: ${loadedStory.title}`);
+        appendLog('ui', `故事已加载：${loadedStory.title}`);
       })
       .catch((error) => {
         setStory(fallbackStory);
-        setErrorMessage(String(error));
-        appendLog('error', `Using fallback story because backend story API failed: ${String(error)}`);
+        setErrorMessage(`故事接口加载失败，已使用本地故事：${String(error)}`);
+        appendLog('error', `故事接口加载失败，已使用本地故事：${String(error)}`);
       });
 
     return () => {
@@ -43,18 +94,31 @@ function App() {
   }, []);
 
   const currentPage = story?.pages[currentPageIndex];
-  const currentSentence = currentPage?.sentences[currentSentenceIndex] ?? '';
+  const currentSentence = currentPage?.sentences[currentSentenceIndex];
   const isConnecting = connectionStatus === 'connecting';
   const isConnected = connectionStatus === 'connected';
   const canStart = connectionStatus === 'idle' || connectionStatus === 'failed' || connectionStatus === 'closed';
-  const webSocketState = realtimeClientRef.current?.getWebSocketState() ?? 'not-created';
+  const webSocketState = realtimeClientRef.current?.getWebSocketState() ?? '未创建';
+  const keywords = useMemo(() => getKeywords(currentSentence), [currentSentence]);
 
   const progressLabel = useMemo(() => {
     if (!story || !currentPage) {
-      return 'Loading...';
+      return '加载中……';
     }
-    return `Page ${currentPage.page} · Sentence ${currentSentenceIndex + 1}/${currentPage.sentences.length}`;
+    return `第 ${currentPage.page} 页 · 第 ${currentSentenceIndex + 1}/${currentPage.sentences.length} 句`;
   }, [story, currentPage, currentSentenceIndex]);
+
+  const startButtonLabel = useMemo(() => {
+    if (isConnecting) {
+      return '正在连接';
+    }
+    if (isConnected) {
+      return '陪练中';
+    }
+    return '开始陪练';
+  }, [isConnecting, isConnected]);
+
+  const stopButtonLabel = connectionStatus === 'closed' ? '已结束' : '结束会话';
 
   function appendLog(kind: DebugLog['kind'], message: string) {
     setLogs((currentLogs) => [
@@ -80,7 +144,7 @@ function App() {
         page: currentPage.page,
         sentenceIndex: currentSentenceIndex,
         timestamp: new Date().toISOString().slice(0, 19),
-      }).catch((error) => appendLog('error', `Failed to save transcript log: ${String(error)}`));
+      }).catch((error) => appendLog('error', `保存学生发言记录失败：${String(error)}`));
     }
   }
 
@@ -98,13 +162,14 @@ function App() {
     try {
       await client.connect({
         storyTitle: story.title,
+        englishTitle: story.englishTitle,
         currentSentence,
         onConnectionStatusChange: setConnectionStatus,
         onMicStatusChange: setMicStatus,
         onDebugEvent: handleRealtimeDebug,
       });
       await client.startMic();
-      appendLog('ui', 'AI tutor WebSocket session started.');
+      appendLog('ui', 'AI 英语阅读陪练已开始。');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setErrorMessage(message);
@@ -116,7 +181,7 @@ function App() {
 
   function handleStop() {
     realtimeClientRef.current?.close();
-    appendLog('ui', 'Stopped the tutor session.');
+    appendLog('ui', '已结束本次陪练会话。');
   }
 
   function handleRepeat() {
@@ -125,7 +190,7 @@ function App() {
     }
     try {
       realtimeClientRef.current?.repeatSentence(currentSentence);
-      appendLog('ui', `Asked AI to repeat: ${currentSentence}`);
+      appendLog('ui', `已请求 AI 老师重复朗读：${currentSentence.english}`);
     } catch (error) {
       setErrorMessage(String(error));
       appendLog('error', String(error));
@@ -156,11 +221,11 @@ function App() {
     setCurrentSentenceIndex(nextSentenceIndex);
 
     const nextSentence = story.pages[nextPageIndex].sentences[nextSentenceIndex];
-    appendLog('ui', `Moved to sentence: ${nextSentence}`);
+    appendLog('ui', `已切换到新句子：${nextSentence.english}`);
 
     if (isConnected) {
       try {
-        realtimeClientRef.current?.updateSentence(story.title, nextSentence);
+        realtimeClientRef.current?.updateSentence(story.title, story.englishTitle, nextSentence);
       } catch (error) {
         setErrorMessage(String(error));
         appendLog('error', String(error));
@@ -177,97 +242,112 @@ function App() {
     <main className="app-shell">
       <section className="hero-card">
         <div>
-          <p className="eyebrow">Realtime WebSocket Demo</p>
-          <h1>AI English Reading Tutor Demo</h1>
-          <p className="subtitle">A simple H5 reading coach powered by a Java WebSocket proxy and Qwen3.5 Omni realtime voice.</p>
+          <p className="eyebrow">中文讲解 + 英文朗读 + 实时语音互动</p>
+          <h1>AI 英语阅读导师演示</h1>
+          <p className="subtitle">一个由 Java 后端代理和 Qwen3.5 Omni 实时语音驱动的中文讲解式英语阅读练习 Demo。</p>
         </div>
-        <div className={`status-pill status-${connectionStatus}`}>{connectionStatus}</div>
+        <div className={`status-pill status-${connectionStatus}`}>{connectionStatusLabels[connectionStatus]}</div>
       </section>
 
       <section className="content-grid">
         <article className="story-panel card">
           <div className="story-header">
             <div>
-              <p className="section-label">Story</p>
-              <h2>{story?.title ?? 'Loading story...'}</h2>
+              <p className="section-label">故事</p>
+              <h2>{story ? `故事：${story.title}` : '正在加载故事……'}</h2>
+              {story?.englishTitle && <p className="english-title">英文名：{story.englishTitle}</p>}
             </div>
-            <span className="level-badge">{story?.level ?? '...'}</span>
+            <span className="level-badge">等级：{story?.level ?? '……'}</span>
           </div>
 
           <div className="progress-row">
-            <span>{progressLabel}</span>
-            <span>Microphone: {micStatus}</span>
+            <span>当前进度：{progressLabel}</span>
+            <span>麦克风：{micStatusLabels[micStatus]}</span>
           </div>
 
           <div className="page-card">
             {currentPage?.sentences.map((sentence, index) => (
-              <p
-                key={`${currentPage.page}-${sentence}`}
+              <div
+                key={`${currentPage.page}-${sentence.english}`}
                 className={index === currentSentenceIndex ? 'sentence active' : 'sentence'}
               >
                 <span className="sentence-number">{index + 1}</span>
-                {sentence}
-              </p>
+                <div>
+                  <p className="sentence-english">{sentence.english}</p>
+                  <p className="sentence-chinese">{sentence.chinese}</p>
+                </div>
+              </div>
             ))}
           </div>
 
           <div className="current-sentence-box">
-            <span>Current sentence</span>
-            <strong>{currentSentence || 'Loading...'}</strong>
+            <span>当前句子</span>
+            <p className="current-label">英文原句：</p>
+            <strong>{currentSentence?.english ?? '加载中……'}</strong>
+            <p className="current-label">中文意思：</p>
+            <p className="current-chinese">{currentSentence?.chinese ?? '加载中……'}</p>
+            {keywords.length > 0 && (
+              <div className="keyword-list">
+                <p className="current-label">重点词：</p>
+                {keywords.map((keyword) => (
+                  <span key={keyword.word}>{keyword.word}：{keyword.meaning}</span>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="button-row">
             <button type="button" onClick={() => moveSentence(-1)} disabled={!isConnected || atFirstSentence}>
-              Previous Sentence
+              上一句
             </button>
             <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>
-              Next Sentence
+              下一句
             </button>
             <button type="button" className="primary" onClick={handleStart} disabled={!canStart || isConnecting || !story}>
-              {isConnecting ? 'Connecting...' : 'Start Tutor'}
+              {startButtonLabel}
             </button>
             <button type="button" onClick={handleRepeat} disabled={!isConnected}>
-              Repeat Reading
+              重复朗读
             </button>
             <button type="button" className="danger" onClick={handleStop} disabled={!isConnected && !isConnecting}>
-              Stop Session
+              {stopButtonLabel}
             </button>
           </div>
 
-          {errorMessage && <div className="error-box">{errorMessage}</div>}
+          {errorMessage && <div className="error-box">错误：{errorMessage}</div>}
         </article>
 
         <aside className="debug-panel card">
           <div className="debug-header">
             <div>
-              <p className="section-label">Debug</p>
-              <h2>Conversation Events</h2>
+              <p className="section-label">对话记录</p>
+              <h2>对话活动</h2>
             </div>
           </div>
 
           <dl className="debug-stats">
             <div>
-              <dt>Connection</dt>
-              <dd>{connectionStatus}</dd>
+              <dt>连接状态</dt>
+              <dd>{connectionStatusLabels[connectionStatus]}</dd>
             </div>
             <div>
-              <dt>WebSocket</dt>
+              <dt>数据通道</dt>
               <dd>{webSocketState}</dd>
             </div>
             <div>
-              <dt>Microphone</dt>
-              <dd>{micStatus}</dd>
+              <dt>麦克风</dt>
+              <dd>{micStatusLabels[micStatus]}</dd>
             </div>
           </dl>
 
           <div className="log-list" aria-live="polite">
             {logs.length === 0 ? (
-              <p className="empty-log">No events yet. Click Start Tutor to request microphone access and connect.</p>
+              <p className="empty-log">还没有对话活动。点击“开始陪练”，允许麦克风权限后开始学习。</p>
             ) : (
               logs.map((log) => (
                 <div key={log.id} className={`log-item log-${log.kind}`}>
                   <span>{log.time}</span>
-                  <strong>{log.kind}</strong>
+                  <strong>{logKindLabels[log.kind]}</strong>
                   <p>{log.message}</p>
                 </div>
               ))
