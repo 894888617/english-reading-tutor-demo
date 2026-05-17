@@ -55,7 +55,11 @@ export class RealtimeWsClient {
   async connect(options: RealtimeWsOptions): Promise<void> {
     this.options = options;
     this.emitConnectionStatus('connecting');
-    const url = options.url ?? 'ws://localhost:8080/ws/realtime';
+    const WS_URL =
+      window.location.protocol === "https:"
+        ? `wss://${window.location.host}/ws/realtime`
+        : `ws://${window.location.host}/ws/realtime`;
+    const url = options.url ?? WS_URL;
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
@@ -83,7 +87,7 @@ export class RealtimeWsClient {
       ws.onerror = () => {
         window.clearTimeout(timeoutId);
         this.emitConnectionStatus('failed');
-        reject(new Error('浏览器 WebSocket 连接失败，请确认 Java 后端已在 8080 端口启动。'));
+        reject(new Error('浏览器 WebSocket 连接失败，请确认后端服务和 /ws/realtime 代理已启动。'));
       };
       ws.onclose = () => {
         this.emitDebug('websocket', '浏览器 WebSocket 已关闭。');

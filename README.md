@@ -8,7 +8,7 @@ H5 实时语音中文讲解式英语阅读练习 Demo：浏览器展示英文绘
 
 ```text
 H5 React 前端
-  ↓ WebSocket: ws://localhost:8080/ws/realtime
+  ↓ WebSocket: /ws/realtime
 Java Spring Boot 后端代理
   ↓ WebSocket + Authorization: Bearer ${DASHSCOPE_API_KEY}
 阿里云百炼 Qwen3.5-Omni-Plus-Realtime
@@ -43,7 +43,7 @@ Java Spring Boot 后端代理
 
 - 阿里云百炼 Qwen3.5-Omni-Plus-Realtime
 - 默认模型：`qwen3.5-omni-plus-realtime`
-- 默认声音：`Tina`
+- 默认声音：`Jennifer`
 - 接入方式：WebSocket
 
 ## 项目目录结构
@@ -89,7 +89,7 @@ english-reading-tutor-demo/
 export DASHSCOPE_API_KEY=你的阿里云百炼APIKey
 export DASHSCOPE_REALTIME_WS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
 export REALTIME_MODEL=qwen3.5-omni-plus-realtime
-export REALTIME_VOICE=Tina
+export REALTIME_VOICE=Jennifer
 ```
 
 说明：
@@ -99,7 +99,7 @@ export REALTIME_VOICE=Tina
   - 北京地址：`wss://dashscope.aliyuncs.com/api-ws/v1/realtime`
   - 新加坡地址：`wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime`
 - `REALTIME_MODEL`：默认 `qwen3.5-omni-plus-realtime`。
-- `REALTIME_VOICE`：默认 `Tina`。
+- `REALTIME_VOICE`：默认 `Jennifer`。请不要使用 `professional_english_teacher`；后端会将不支持的 voice 回退到 `Jennifer`。
 - 不需要也不再读取 `ALIYUN_WEBRTC_ENDPOINT`。
 
 `backend-java/src/main/resources/application.yml` 默认配置：
@@ -113,7 +113,7 @@ aliyun:
     api-key: ${DASHSCOPE_API_KEY:}
     realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
     realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
-    voice: ${REALTIME_VOICE:Tina}
+    default-voice: ${REALTIME_VOICE:Jennifer}
 ```
 
 ## 后端启动方式
@@ -149,7 +149,83 @@ npm run dev
 http://localhost:5173
 ```
 
-前端通过 Vite Proxy 将 `/api` 请求转发到 `http://localhost:8080`。实时语音 WebSocket 默认连接 `ws://localhost:8080/ws/realtime`。
+前端开发环境通过 Vite Proxy 将 `/api` 请求转发到 `http://localhost:8080`。生产环境由 Nginx 反向代理 `/api/` 和 `/ws/`；前端 API 固定使用 `/api`，实时语音 WebSocket 会根据当前页面协议和域名自动连接 `/ws/realtime`。
+
+
+## Docker 容器化部署
+
+项目根目录提供 `docker-compose.yml`，包含 `backend-java` 与 `frontend` 两个服务：
+
+- `backend-java`：Spring Boot 后端，容器名 `ai-reading-backend`，监听容器内 `8080`。
+- `frontend`：Nginx 托管 Vite 构建产物，容器名 `ai-reading-frontend`，宿主机暴露 `8088:80`。
+- Nginx 会托管 H5 静态页面，并代理 `/api/` 到后端 `/api/`、代理 `/ws/` 到后端 `/ws/`，支持 WebSocket Upgrade。
+- 上传文件和绘本 JSON 元数据挂载到宿主机 `./data/uploads`、`./data/books`、`./data/covers`，日志目录挂载到 `./logs`，容器重启后数据不丢失。
+
+部署步骤：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，至少填写：
+
+```bash
+DASHSCOPE_API_KEY=你的阿里云百炼APIKey
+```
+
+默认 mock 配置如下，适合先完成页面、上传、评分和 OCR 流程联调：
+
+```bash
+ASSESSMENT_PROVIDER=mock
+OCR_PROVIDER=mock
+REALTIME_VOICE=Jennifer
+```
+
+创建持久化目录：
+
+```bash
+mkdir -p data/uploads data/books data/covers logs
+```
+
+构建并后台启动：
+
+```bash
+docker compose up -d --build
+```
+
+查看后端日志：
+
+```bash
+docker logs -f ai-reading-backend
+```
+
+查看前端日志：
+
+```bash
+docker logs -f ai-reading-frontend
+```
+
+浏览器访问：
+
+```text
+http://服务器IP:8088
+```
+
+常用验收命令：
+
+```bash
+curl http://服务器IP:8088/api/story
+curl http://服务器IP:8088/api/books
+```
+
+实时语音会从页面当前地址自动建立 WebSocket：
+
+```ts
+const WS_URL =
+  window.location.protocol === "https:"
+    ? `wss://${window.location.host}/ws/realtime`
+    : `ws://${window.location.host}/ws/realtime`;
+```
 
 ## 前后端 WebSocket 协议
 
@@ -239,7 +315,7 @@ http://localhost:5173
    export DASHSCOPE_API_KEY=你的阿里云百炼APIKey
    export DASHSCOPE_REALTIME_WS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
    export REALTIME_MODEL=qwen3.5-omni-plus-realtime
-   export REALTIME_VOICE=Tina
+   export REALTIME_VOICE=Jennifer
    ```
 
 3. 启动后端：
@@ -289,7 +365,7 @@ http://localhost:5173
 
 - 确认后端运行在 `http://localhost:8080`。
 - 直接访问 `http://localhost:8080/api/story` 检查接口。
-- 如果前端和后端不在同一机器，设置 `VITE_API_BASE_URL` 为后端地址。
+- Docker 部署时确认 frontend Nginx 代理正常：访问 `http://服务器IP:8088/api/story` 检查接口。
 
 ### 3. 为什么后端不把 API Key 返回给前端？
 
@@ -330,7 +406,7 @@ backend-java/
 ```yaml
 app:
   upload:
-    max-file-size-mb: 20
+    max-file-size-mb: 50
     max-pdf-pages: 30
 
 ocr:
