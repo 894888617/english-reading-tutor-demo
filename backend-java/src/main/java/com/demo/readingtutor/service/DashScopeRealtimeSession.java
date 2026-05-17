@@ -1,7 +1,6 @@
 package com.demo.readingtutor.service;
 
 import com.demo.readingtutor.config.RealtimeProperties;
-import com.demo.readingtutor.config.TtsProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,12 +27,13 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
 
     private final RealtimeProperties properties;
     private final ObjectMapper objectMapper;
-    private final TtsProperties ttsProperties;
+    private final VoiceMappingService voiceMappingService;
     private final Consumer<String> jsonToBrowser;
     private final Consumer<byte[]> audioToBrowser;
     private final HttpClient httpClient;
     private final StringBuilder textBuffer = new StringBuilder();
     private final AtomicBoolean open = new AtomicBoolean(false);
+    private final AtomicBoolean hasActiveResponse = new AtomicBoolean(false);
     private final ConcurrentLinkedQueue<String> pendingOutboundMessages = new ConcurrentLinkedQueue<>();
     private volatile WebSocket webSocket;
     private volatile String bookTitle = "";
@@ -44,16 +44,18 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     private volatile String currentSentenceChinese = "";
     private volatile String currentKeywords = "";
     private volatile String voiceStyle = "";
+    private volatile String activeResponseId = null;
+    private volatile String lastAnnouncedVoice = "";
 
     public DashScopeRealtimeSession(
             RealtimeProperties properties,
-            TtsProperties ttsProperties,
+            VoiceMappingService voiceMappingService,
             ObjectMapper objectMapper,
             Consumer<String> jsonToBrowser,
             Consumer<byte[]> audioToBrowser
     ) {
         this.properties = properties;
-        this.ttsProperties = ttsProperties;
+        this.voiceMappingService = voiceMappingService;
         this.objectMapper = objectMapper;
         this.jsonToBrowser = jsonToBrowser;
         this.audioToBrowser = audioToBrowser;
@@ -154,16 +156,16 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                 }
             }
         }
-        sendTextInstruction("请使用专业外教声音，按顺序朗读当前页所有英文句子。只朗读英文，不要加入中文解释。每句之间停顿 0.8 秒。\n" + sentences);
+        sendTextInstruction("请使用专业英文外教声音朗读当前页所有英文句子。只朗读英文，不要中文解释。每句之间停顿一小会儿，语速自然清晰。\n" + sentences);
     }
 
     public void readSentence(String sentence, String speed, String voiceStyle) {
         updateVoiceStyle(voiceStyle);
         String target = StringUtils.hasText(sentence) ? sentence.trim() : this.currentSentenceEnglish;
         if ("slow".equalsIgnoreCase(speed)) {
-            sendTextInstruction("请用比正常语速更慢、更清晰的专业外教发音朗读这个英文句子，只朗读英文，不要解释：" + target);
+            sendTextInstruction("请用更慢、更清楚的专业英文外教发音朗读这个句子，只朗读英文，不要解释：\n" + target);
         } else {
-            sendTextInstruction("请用专业外教发音清晰朗读这个英文句子，只朗读英文，不要解释：" + target);
+            sendTextInstruction("请用专业英文外教声音自然朗读下面这个英文句子，只朗读英文，不要解释：\n" + target);
         }
     }
 
@@ -172,21 +174,21 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         if (StringUtils.hasText(currentSentenceChinese)) {
             this.currentSentenceChinese = currentSentenceChinese;
         }
-        sendTextInstruction("请只重复朗读这个英文句子，不要中文解释，不要重新讲解：" + sentence);
+        sendTextInstruction("请再次清晰朗读这个英文句子，只读英文：\n" + sentence);
     }
 
     public void readWord(String word, String sentence, String voiceStyle) {
         updateVoiceStyle(voiceStyle);
-        sendTextInstruction("请用专业外教发音清晰朗读这个英文单词，只读单词本身，不要解释：" + word);
+        sendTextInstruction("请用专业英文外教发音清晰朗读这个英文单词，只读单词本身：\n" + word);
     }
 
     public void assessmentFeedback(JsonNode result, String voiceStyle) {
         updateVoiceStyle(voiceStyle);
-        sendTextInstruction("请用中文给 6-10 岁孩子做简短反馈：先鼓励；指出最多 2 个最重要的问题；给出具体改进建议；示范要练习的英文单词或短语；不要说太长；不要批评孩子。评测结果：" + result.toString());
+        sendTextInstruction("你是一名中文授课的少儿英语老师。请根据学生跟读评分，用中文给 6-10 岁孩子做简短反馈。要求：1. 先鼓励；2. 指出最多 2 个关键问题；3. 给出具体改进建议；4. 示范要练习的英文单词或短语；5. 不要太长；6. 不要批评孩子。评测结果：" + result.toString());
     }
 
     public void stopPlayback() {
-        sendDashScopeJson(Map.of("type", "response.cancel"));
+        cancelActiveResponseIfNeeded();
         sendBrowserJson(Map.of("type", "playback_done", "message", "已暂停播放。"));
     }
 
@@ -212,8 +214,8 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         if (!StringUtils.hasText(text)) {
             return;
         }
+        cancelActiveResponseIfNeeded();
         sendBrowserJson(Map.of("type", "playback_started", "message", "AI 开始朗读。"));
-        sendDashScopeJson(Map.of("type", "response.cancel"));
         sendDashScopeJson(Map.of(
                 "type", "conversation.item.create",
                 "item", Map.of(
@@ -222,7 +224,17 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                         "content", List.of(Map.of("type", "input_text", "text", text))
                 )
         ));
+        hasActiveResponse.set(true);
         sendDashScopeJson(Map.of("type", "response.create"));
+    }
+
+    private void cancelActiveResponseIfNeeded() {
+        if (!hasActiveResponse.get()) {
+            return;
+        }
+        sendDashScopeJson(Map.of("type", "response.cancel"));
+        hasActiveResponse.set(false);
+        activeResponseId = null;
     }
 
     public void close() {
@@ -238,11 +250,13 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     }
 
     private void sendSessionUpdate() {
+        String voice = currentVoice();
+        announceVoiceIfChanged(voice);
         sendDashScopeJson(Map.of(
                 "type", "session.update",
                 "session", Map.of(
                         "modalities", List.of("text", "audio"),
-                        "voice", ttsProperties.resolveVoice(voiceStyle, properties.getVoice()),
+                        "voice", voice,
                         "input_audio_format", "pcm",
                         "output_audio_format", "pcm",
                         "instructions", buildTutorInstructions(),
@@ -254,6 +268,17 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                         "temperature", 0.6
                 )
         ));
+    }
+
+    private String currentVoice() {
+        return voiceMappingService.resolveVoice(voiceStyle, properties.getDefaultVoice());
+    }
+
+    private void announceVoiceIfChanged(String voice) {
+        if (!voice.equals(lastAnnouncedVoice)) {
+            lastAnnouncedVoice = voice;
+            sendBrowserJson(Map.of("type", "status", "message", "音色：" + voice));
+        }
     }
 
     private String buildTutorInstructions() {
@@ -332,6 +357,12 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         try {
             JsonNode event = objectMapper.readTree(message);
             String type = event.path("type").asText("unknown");
+            if ("response.created".equals(type) || "response.output_item.added".equals(type)) {
+                hasActiveResponse.set(true);
+                String responseId = event.path("response").path("id").asText(event.path("response_id").asText(""));
+                activeResponseId = StringUtils.hasText(responseId) ? responseId : activeResponseId;
+                return;
+            }
             if ("response.audio.delta".equals(type)) {
                 String audio = event.path("audio").asText(event.path("delta").asText(""));
                 if (StringUtils.hasText(audio)) {
@@ -347,16 +378,19 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
                 sendBrowserJson(Map.of("type", "ai_text_done", "text", event.path("transcript").asText(event.path("text").asText(""))));
                 return;
             }
-            if ("response.done".equals(type)) {
+            if ("response.done".equals(type) || "response.cancelled".equals(type)) {
+                hasActiveResponse.set(false);
+                activeResponseId = null;
                 sendBrowserJson(Map.of("type", "playback_done", "message", "AI 朗读完成。"));
                 return;
             }
             if ("error".equals(type) || event.has("error")) {
+                hasActiveResponse.set(false);
+                activeResponseId = null;
                 log.warn("DashScope realtime returned error event: {}", message);
                 sendBrowserJson(Map.of("type", "error", "message", message));
                 return;
             }
-            sendBrowserJson(Map.of("type", "dashscope_event", "event", event));
         } catch (Exception ex) {
             log.warn("Failed to parse DashScope realtime message: {}", message, ex);
             sendBrowserError("解析百炼消息失败：" + ex.getMessage());

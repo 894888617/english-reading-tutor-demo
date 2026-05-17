@@ -8,7 +8,7 @@ public class RealtimeProperties {
     private String apiKey;
     private String realtimeWsUrl = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
     private String realtimeModel = "qwen3.5-omni-plus-realtime";
-    private String voice = "Tina";
+    private String defaultVoice = "Jennifer";
 
     public String getApiKey() {
         return apiKey;
@@ -34,12 +34,12 @@ public class RealtimeProperties {
         this.realtimeModel = realtimeModel;
     }
 
-    public String getVoice() {
-        return voice;
+    public String getDefaultVoice() {
+        return defaultVoice;
     }
 
-    public void setVoice(String voice) {
-        this.voice = voice;
+    public void setDefaultVoice(String defaultVoice) {
+        this.defaultVoice = defaultVoice;
     }
 
     public boolean hasApiKey() {

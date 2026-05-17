@@ -1,8 +1,8 @@
 package com.demo.readingtutor.ws;
 
 import com.demo.readingtutor.config.RealtimeProperties;
-import com.demo.readingtutor.config.TtsProperties;
 import com.demo.readingtutor.service.DashScopeRealtimeSession;
+import com.demo.readingtutor.service.VoiceMappingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -25,12 +25,12 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
 
     private final RealtimeProperties properties;
     private final ObjectMapper objectMapper;
-    private final TtsProperties ttsProperties;
+    private final VoiceMappingService voiceMappingService;
     private final Map<String, DashScopeRealtimeSession> dashScopeSessions = new ConcurrentHashMap<>();
 
-    public RealtimeWebSocketHandler(RealtimeProperties properties, TtsProperties ttsProperties, ObjectMapper objectMapper) {
+    public RealtimeWebSocketHandler(RealtimeProperties properties, VoiceMappingService voiceMappingService, ObjectMapper objectMapper) {
         this.properties = properties;
-        this.ttsProperties = ttsProperties;
+        this.voiceMappingService = voiceMappingService;
         this.objectMapper = objectMapper;
     }
 
@@ -38,7 +38,7 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession browserSession) {
         DashScopeRealtimeSession dashScopeSession = new DashScopeRealtimeSession(
                 properties,
-                ttsProperties,
+                voiceMappingService,
                 objectMapper,
                 json -> sendText(browserSession, json),
                 audio -> sendBinary(browserSession, audio)

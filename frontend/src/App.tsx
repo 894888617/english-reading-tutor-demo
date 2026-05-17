@@ -136,7 +136,8 @@ function App() {
     return scored?.length ? scored : tokenizeSentence(currentSentence?.english ?? '').map((token) => ({ ...token, meaning: wordMeaning(token.text, keywords), status: selectedWord?.index === token.index ? 'current' : token.status }));
   }, [assessmentResult, currentSentence?.english, keywords, selectedWord]);
   const hasCurrentSentence = Boolean(currentSentence?.english.trim());
-  const canUseReadingControls = isConnected && hasCurrentSentence && !isAiPlaying;
+  const isRecordingOrScoring = recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring';
+  const canUseReadingControls = isConnected && hasCurrentSentence && !isAiPlaying && !isRecordingOrScoring;
   const recordingStatusLabels: Record<RecordingStatus, string> = { idle: '未录音', recording: '录音中', uploading: '识别中', scoring: '评分中', done: '已完成', failed: '失败' };
   const voiceStyleLabels: Record<VoiceStyle, string> = { professional_female: '专业外教女声', professional_male: '专业外教男声', child_friendly_female: '儿童友好女声', child_friendly_male: '儿童友好男声' };
 
@@ -532,7 +533,7 @@ function App() {
       setAssessmentResult(null);
       await recorder.start();
       setRecordingStatus('recording');
-      appendLog('recording', '开始录音。');
+      appendLog('recording', '开始录音');
     } catch (error) {
       setRecordingStatus('failed');
       setErrorMessage(String(error));
@@ -546,7 +547,7 @@ function App() {
       if (!result) return;
       setRecordingResult(result);
       setRecordingStatus('idle');
-      appendLog('recording', `停止录音，时长 ${(result.durationMs / 1000).toFixed(1)} 秒。`);
+      appendLog('recording', `停止录音，时长 ${(result.durationMs / 1000).toFixed(1)} 秒`);
     } catch (error) {
       setRecordingStatus('failed');
       setErrorMessage(String(error));
@@ -569,7 +570,7 @@ function App() {
     }
     try {
       setRecordingStatus('uploading');
-      appendLog('assessment', '上传评分。');
+      appendLog('assessment', '正在评分');
       setRecordingStatus('scoring');
       const result = await assessReading({
         audio: recordingResult.blob,
@@ -580,11 +581,11 @@ function App() {
       });
       setAssessmentResult(result);
       setRecordingStatus('done');
-      appendLog('assessment', `收到评分结果：总分 ${result.score.totalScore}。`);
-      appendLog('correction', '生成发音纠正。');
+      appendLog('assessment', `评分完成：总分 ${result.score.totalScore}`);
+      result.issues.filter((issue) => issue.type === 'missed').forEach((issue) => appendLog('correction', `发现漏读词：${issue.targetWord ?? ''}`));
       try {
         realtimeClientRef.current?.sendAssessmentFeedback(result);
-        appendLog('assessment', 'AI 语音反馈已请求。');
+        appendLog('assessment', 'AI反馈完成');
       } catch (error) {
         appendLog('error', `模型语音反馈失败：${String(error)}`);
       }
@@ -734,7 +735,7 @@ function App() {
               </select>
             </label>
             <div className="button-row">
-              <button type="button" onClick={handleReadPage} disabled={!isConnected || !currentPage?.sentences.length || isAiPlaying}>整页朗读</button>
+              <button type="button" onClick={handleReadPage} disabled={!isConnected || !currentPage?.sentences.length || isAiPlaying || isRecordingOrScoring}>整页朗读</button>
               <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>逐句播放</button>
               <button type="button" onClick={handleRepeat} disabled={!canUseReadingControls}>重复本句</button>
               <button type="button" onClick={() => handleReadSentence('slow')} disabled={!canUseReadingControls}>慢速播放</button>
@@ -747,11 +748,12 @@ function App() {
           <div className="learning-section">
             <div className="section-title-row"><h3>跟读录音区</h3><span>{recordingStatusLabels[recordingStatus]}</span></div>
             <div className="button-row">
-              <button type="button" className="primary" onClick={() => void handleStartRecording()} disabled={recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'done' ? '重新跟读' : '开始跟读'}</button>
+              <button type="button" className="primary" onClick={() => void handleStartRecording()} disabled={isAiPlaying || recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'done' ? '重新跟读' : '开始跟读'}</button>
               <button type="button" onClick={() => void handleStopRecording()} disabled={recordingStatus !== 'recording'}>停止录音</button>
               <button type="button" onClick={handleResetRecording} disabled={recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>重新录音</button>
               <button type="button" onClick={() => void handleSubmitAssessment()} disabled={!recordingResult || recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'scoring' ? '正在评分' : '提交评分'}</button>
               {assessmentResult && <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>再读整句</button>}
+              {assessmentResult && <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>下一句</button>}
             </div>
             {recordingResult && <p className="help-text">已录音 {(recordingResult.durationMs / 1000).toFixed(1)} 秒，点击“提交评分”查看发音纠正。</p>}
           </div>

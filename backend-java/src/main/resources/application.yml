@@ -6,7 +6,7 @@ aliyun:
     api-key: ${DASHSCOPE_API_KEY:}
     realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
     realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
-    voice: ${REALTIME_VOICE:professional_english_teacher}
+    default-voice: ${REALTIME_VOICE:Jennifer}
 
 
 spring:
@@ -43,8 +43,3 @@ tts:
   voice-style: ${REALTIME_VOICE_STYLE:professional_female}
   speed-normal: 1.0
   speed-slow: 0.75
-  voices:
-    professional_female: ${REALTIME_VOICE_PROFESSIONAL_FEMALE:${REALTIME_VOICE:professional_english_teacher}}
-    professional_male: ${REALTIME_VOICE_PROFESSIONAL_MALE:${REALTIME_VOICE:professional_english_teacher}}
-    child_friendly_female: ${REALTIME_VOICE_CHILD_FRIENDLY_FEMALE:${REALTIME_VOICE:professional_english_teacher}}
-    child_friendly_male: ${REALTIME_VOICE_CHILD_FRIENDLY_MALE:${REALTIME_VOICE:professional_english_teacher}}
