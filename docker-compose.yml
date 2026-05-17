@@ -1,0 +1,23 @@
+services:
+  backend-java:
+    build:
+      context: ./backend-java
+    container_name: ai-reading-backend
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./data/books:/app/data/books
+      - ./data/covers:/app/data/covers
+      - ./logs:/app/logs
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ai-reading-frontend
+    restart: always
+    depends_on:
+      - backend-java
+    ports:
+      - "8088:80"

@@ -12,16 +12,16 @@ aliyun:
 spring:
   servlet:
     multipart:
-      max-file-size: 20MB
-      max-request-size: 20MB
+      max-file-size: 50MB
+      max-request-size: 50MB
 
 app:
   upload:
-    max-file-size-mb: 20
+    max-file-size-mb: 50
     max-pdf-pages: 30
 
 ocr:
-  provider: mock
+  provider: ${OCR_PROVIDER:mock}
   baidu:
     api-key: 
     secret-key: 
