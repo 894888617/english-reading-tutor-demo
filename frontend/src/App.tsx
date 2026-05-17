@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { deleteBook, getBook, listBooks, saveLog, updateBook, uploadBook } from './api';
+import { assessReading, deleteBook, getBook, listBooks, saveLog, updateBook, uploadBook } from './api';
 import { RealtimeWsClient, type ConnectionStatus, type MicStatus, type RealtimeDebugEvent } from './realtime-ws';
+import { tokenizeSentence, wordMeaning, type ReadingAssessmentResult, type ReadMode, type RecordingStatus, type VoiceStyle, type WordToken } from './analysis/pronunciationDiff';
+import { Recorder, type RecorderResult } from './recording/Recorder';
 import { fallbackBook, type Book, type BookListItem, type BookPage, type KeywordItem, type Sentence } from './story';
 
 type DebugLog = {
@@ -28,9 +30,14 @@ const micStatusLabels: Record<MicStatus, string> = {
 
 const logKindLabels: Record<DebugLog['kind'], string> = {
   ui: '系统',
-  status: '状态',
-  websocket: '状态',
-  event: '模型事件',
+  system: '系统',
+  reading: '朗读',
+  recording: '录音',
+  assessment: '评分',
+  correction: '纠错',
+  status: '系统',
+  websocket: '系统',
+  event: '系统',
   text: 'AI 老师',
   transcript: '学生',
   audio: '音频',
@@ -94,6 +101,15 @@ function App() {
   const [uploadLevel, setUploadLevel] = useState('初学者');
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>('professional_female');
+  const [isAiPlaying, setIsAiPlaying] = useState(false);
+  const [readMode, setReadMode] = useState<ReadMode | null>(null);
+  const [selectedWord, setSelectedWord] = useState<WordToken | null>(null);
+  const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>('idle');
+  const [recordingResult, setRecordingResult] = useState<RecorderResult | null>(null);
+  const [assessmentResult, setAssessmentResult] = useState<ReadingAssessmentResult | null>(null);
+  const recorderRef = useRef<Recorder | null>(null);
+  const readTimerRef = useRef<number | null>(null);
   const realtimeClientRef = useRef<RealtimeWsClient | null>(null);
   const logIdRef = useRef(1);
 
@@ -101,6 +117,10 @@ function App() {
     void refreshBooks();
     return () => {
       realtimeClientRef.current?.close();
+      recorderRef.current?.reset();
+      if (readTimerRef.current) {
+        window.clearTimeout(readTimerRef.current);
+      }
     };
   }, []);
 
@@ -111,6 +131,14 @@ function App() {
   const canStart = connectionStatus === 'idle' || connectionStatus === 'failed' || connectionStatus === 'closed';
   const webSocketState = realtimeClientRef.current?.getWebSocketState() ?? '未创建';
   const keywords = currentSentence?.keywords ?? [];
+  const currentWordTokens = useMemo(() => {
+    const scored = assessmentResult && assessmentResult.targetText === currentSentence?.english ? assessmentResult.wordResults : null;
+    return scored?.length ? scored : tokenizeSentence(currentSentence?.english ?? '').map((token) => ({ ...token, meaning: wordMeaning(token.text, keywords), status: selectedWord?.index === token.index ? 'current' : token.status }));
+  }, [assessmentResult, currentSentence?.english, keywords, selectedWord]);
+  const hasCurrentSentence = Boolean(currentSentence?.english.trim());
+  const canUseReadingControls = isConnected && hasCurrentSentence && !isAiPlaying;
+  const recordingStatusLabels: Record<RecordingStatus, string> = { idle: '未录音', recording: '录音中', uploading: '识别中', scoring: '评分中', done: '已完成', failed: '失败' };
+  const voiceStyleLabels: Record<VoiceStyle, string> = { professional_female: '专业外教女声', professional_male: '专业外教男声', child_friendly_female: '儿童友好女声', child_friendly_male: '儿童友好男声' };
 
   const progressLabel = useMemo(() => {
     if (!selectedBook || !currentPage) {
@@ -160,6 +188,8 @@ function App() {
       setEditableBook(structuredClone(book));
       setCurrentPageIndex(0);
       setCurrentSentenceIndex(0);
+      setAssessmentResult(null);
+      setSelectedWord(null);
       setErrorMessage('');
       if (showLog) {
         appendLog('ui', `已选择绘本：${book.title}`);
@@ -319,9 +349,11 @@ function App() {
         onConnectionStatusChange: setConnectionStatus,
         onMicStatusChange: setMicStatus,
         onDebugEvent: handleRealtimeDebug,
+        voiceStyle,
+        onPlaybackChange: setIsAiPlaying,
       });
       await client.startMic();
-      appendLog('ui', 'AI 英语阅读陪练已开始。');
+      appendLog('system', 'AI 英语阅读陪练已开始。');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setErrorMessage(message);
@@ -333,7 +365,62 @@ function App() {
 
   function handleStop() {
     realtimeClientRef.current?.close();
-    appendLog('ui', '已结束本次陪练会话。');
+    setIsAiPlaying(false);
+    appendLog('system', '已结束本次陪练会话。');
+  }
+
+  function ensureConnectedForReading(): boolean {
+    if (!isConnected) {
+      setErrorMessage('请先点击“开始学习这本绘本”，连接 AI 外教声音。');
+      return false;
+    }
+    if (isAiPlaying) {
+      setErrorMessage('AI 正在朗读，请稍后再操作。');
+      return false;
+    }
+    if (!currentSentence?.english.trim()) {
+      setErrorMessage('当前没有可朗读的句子。');
+      return false;
+    }
+    setErrorMessage('');
+    return true;
+  }
+
+  function estimatePageHighlight(sentences: Sentence[]) {
+    if (readTimerRef.current) window.clearTimeout(readTimerRef.current);
+    let index = 0;
+    const tick = () => {
+      if (index >= sentences.length) return;
+      setCurrentSentenceIndex(index);
+      const words = sentences[index].english.split(/\s+/).filter(Boolean).length;
+      const duration = Math.max(1400, words * 430 + 800);
+      index += 1;
+      readTimerRef.current = window.setTimeout(tick, duration);
+    };
+    tick();
+  }
+
+  function handleReadPage() {
+    if (!isConnected || isAiPlaying) {
+      setErrorMessage(isAiPlaying ? 'AI 正在朗读，请稍后再操作。' : '请先点击“开始学习这本绘本”，连接 AI 外教声音。');
+      return;
+    }
+    const sentences = currentPage?.sentences.filter((sentence) => sentence.english.trim()) ?? [];
+    if (!sentences.length || !currentPage) {
+      setErrorMessage('当前没有可朗读的句子。');
+      return;
+    }
+    realtimeClientRef.current?.readPage(currentPage.pageNo, sentences.map((sentence) => sentence.english), 'normal');
+    setReadMode('page');
+    estimatePageHighlight(sentences);
+    appendLog('reading', '开始整页朗读。');
+  }
+
+  function handleReadSentence(speed: 'normal' | 'slow' = 'normal') {
+    if (!ensureConnectedForReading()) return;
+    realtimeClientRef.current?.readSentence(currentSentence!.english, speed);
+    setReadMode(speed === 'slow' ? 'slow' : 'sentence');
+    appendLog('reading', speed === 'slow' ? '开始慢速播放当前句。' : '开始逐句播放当前句。');
   }
 
   function handleRepeat() {
@@ -341,9 +428,14 @@ function App() {
       setErrorMessage('当前绘本还没有可学习的英文句子，请先编辑并保存。');
       return;
     }
+    if (isAiPlaying) {
+      setErrorMessage('AI 正在朗读，请稍后再操作。');
+      return;
+    }
     try {
       realtimeClientRef.current?.repeatSentence(currentSentence);
-      appendLog('ui', `已请求 AI 老师重复朗读：${currentSentence.english}`);
+      setReadMode('repeat');
+      appendLog('reading', `重复本句：${currentSentence.english}`);
     } catch (error) {
       setErrorMessage(String(error));
       appendLog('error', String(error));
@@ -368,6 +460,8 @@ function App() {
 
     setCurrentPageIndex(nextPageIndex);
     setCurrentSentenceIndex(nextSentenceIndex);
+    setAssessmentResult(null);
+    setSelectedWord(null);
     const nextSentence = selectedBook.pages[nextPageIndex].sentences[nextSentenceIndex];
     appendLog('ui', `已切换到新句子：${nextSentence.english}`);
 
@@ -378,6 +472,126 @@ function App() {
         setErrorMessage(String(error));
         appendLog('error', String(error));
       }
+    }
+  }
+
+  function handleStopPlayback() {
+    realtimeClientRef.current?.stopPlayback();
+    setIsAiPlaying(false);
+    if (readTimerRef.current) window.clearTimeout(readTimerRef.current);
+    appendLog('reading', '暂停播放。');
+  }
+
+  function handleVoiceStyleChange(nextStyle: VoiceStyle) {
+    setVoiceStyle(nextStyle);
+    try {
+      realtimeClientRef.current?.updateVoiceStyle(nextStyle);
+      appendLog('system', `已切换外教声音：${voiceStyleLabels[nextStyle]}`);
+    } catch {
+      appendLog('system', `外教声音将在下次连接时生效：${voiceStyleLabels[nextStyle]}`);
+    }
+  }
+
+  function handleWordClick(token: WordToken) {
+    if (!currentSentence?.english.trim()) {
+      setErrorMessage('当前没有可朗读的句子。');
+      return;
+    }
+    if (isAiPlaying) {
+      setErrorMessage('AI 正在朗读，请稍后再操作。');
+      return;
+    }
+    if (!isConnected) {
+      setErrorMessage('请先点击“开始学习这本绘本”，连接 AI 外教声音。');
+      return;
+    }
+    setSelectedWord({ ...token, meaning: token.meaning ?? wordMeaning(token.text, keywords), status: 'current' });
+    try {
+      realtimeClientRef.current?.readWord(token.text, currentSentence.english);
+      setReadMode('word');
+      appendLog('reading', `单词点读：${token.text}`);
+    } catch (error) {
+      setErrorMessage(String(error));
+      appendLog('error', String(error));
+    }
+  }
+
+  async function handleStartRecording() {
+    if (!currentSentence?.english.trim()) {
+      setErrorMessage('用户未选择句子就录音，请先选择一个英文句子。');
+      return;
+    }
+    if (isAiPlaying) {
+      setErrorMessage('AI 正在朗读，请稍后再操作。');
+      return;
+    }
+    try {
+      const recorder = new Recorder();
+      recorderRef.current = recorder;
+      setRecordingResult(null);
+      setAssessmentResult(null);
+      await recorder.start();
+      setRecordingStatus('recording');
+      appendLog('recording', '开始录音。');
+    } catch (error) {
+      setRecordingStatus('failed');
+      setErrorMessage(String(error));
+      appendLog('error', `开始录音失败：${String(error)}`);
+    }
+  }
+
+  async function handleStopRecording() {
+    try {
+      const result = await recorderRef.current?.stop();
+      if (!result) return;
+      setRecordingResult(result);
+      setRecordingStatus('idle');
+      appendLog('recording', `停止录音，时长 ${(result.durationMs / 1000).toFixed(1)} 秒。`);
+    } catch (error) {
+      setRecordingStatus('failed');
+      setErrorMessage(String(error));
+      appendLog('error', `停止录音失败：${String(error)}`);
+    }
+  }
+
+  function handleResetRecording() {
+    recorderRef.current?.reset();
+    setRecordingResult(null);
+    setAssessmentResult(null);
+    setRecordingStatus('idle');
+    appendLog('recording', '重新录音。');
+  }
+
+  async function handleSubmitAssessment() {
+    if (!recordingResult || !currentSentence?.english.trim()) {
+      setErrorMessage('请先完成当前句子的跟读录音。');
+      return;
+    }
+    try {
+      setRecordingStatus('uploading');
+      appendLog('assessment', '上传评分。');
+      setRecordingStatus('scoring');
+      const result = await assessReading({
+        audio: recordingResult.blob,
+        targetText: currentSentence.english,
+        bookId: selectedBook?.id,
+        pageNo: currentPage?.pageNo,
+        sentenceIndex: currentSentenceIndex,
+      });
+      setAssessmentResult(result);
+      setRecordingStatus('done');
+      appendLog('assessment', `收到评分结果：总分 ${result.score.totalScore}。`);
+      appendLog('correction', '生成发音纠正。');
+      try {
+        realtimeClientRef.current?.sendAssessmentFeedback(result);
+        appendLog('assessment', 'AI 语音反馈已请求。');
+      } catch (error) {
+        appendLog('error', `模型语音反馈失败：${String(error)}`);
+      }
+    } catch (error) {
+      setRecordingStatus('failed');
+      setErrorMessage(`评分失败，请重新录音。${String(error)}`);
+      appendLog('error', `评分失败：${String(error)}`);
     }
   }
 
@@ -493,7 +707,7 @@ function App() {
             </div>
             <span className="level-badge">等级：{selectedBook?.level ?? '……'}</span>
           </div>
-          <div className="progress-row"><span>当前进度：{progressLabel}</span><span>麦克风：{micStatusLabels[micStatus]}</span></div>
+          <div className="progress-row"><span>当前进度：{progressLabel}</span><span>麦克风：{micStatusLabels[micStatus]}</span><span>跟读：{recordingStatusLabels[recordingStatus]}</span></div>
           <div className="page-card">
             {currentPage?.sentences.length ? currentPage.sentences.map((sentence, index) => (
               <div key={`${currentPage.pageNo}-${index}`} className={index === currentSentenceIndex ? 'sentence active' : 'sentence'}>
@@ -504,15 +718,66 @@ function App() {
           </div>
           <div className="current-sentence-box">
             <span>当前句子</span>
-            <p className="current-label">英文原句：</p><strong>{currentSentence?.english || '请先编辑英文句子'}</strong>
+            <p className="current-label">英文原句：</p><div className="token-line">{currentWordTokens.length ? currentWordTokens.map((token) => (
+              <button key={`${token.index}-${token.text}-${token.status}`} type="button" className={`word-token token-${token.status ?? 'correct'}`} onClick={() => handleWordClick(token)}>{token.text}</button>
+            )) : <strong>{currentSentence?.english || '请先编辑英文句子'}</strong>}</div>
             <p className="current-label">中文意思：</p><p className="current-chinese">{currentSentence?.chinese || '请填写中文意思，方便 AI 用中文讲解。'}</p>
             <div className="keyword-list"><p className="current-label">重点词：</p>{keywords.length ? keywords.map((keyword) => <span key={`${keyword.word}-${keyword.meaning}`}>{keyword.word}：{keyword.meaning}</span>) : <em>暂无重点词，可在编辑区补充。</em>}</div>
+            {selectedWord && <div className="word-meaning">{selectedWord.text}：{selectedWord.meaning ?? '暂无中文释义，可在重点词中补充。'}</div>}
           </div>
-          <div className="button-row">
-            <button type="button" onClick={() => moveSentence(-1)} disabled={!isConnected || atFirstSentence}>上一句</button>
-            <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>下一句</button>
+
+          <div className="learning-section">
+            <div className="section-title-row"><h3>朗读控制区</h3><span>当前模式：{readMode ?? '未播放'}</span></div>
+            <label className="voice-select">外教声音
+              <select value={voiceStyle} onChange={(event) => handleVoiceStyleChange(event.target.value as VoiceStyle)}>
+                {Object.entries(voiceStyleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <div className="button-row">
+              <button type="button" onClick={handleReadPage} disabled={!isConnected || !currentPage?.sentences.length || isAiPlaying}>整页朗读</button>
+              <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>逐句播放</button>
+              <button type="button" onClick={handleRepeat} disabled={!canUseReadingControls}>重复本句</button>
+              <button type="button" onClick={() => handleReadSentence('slow')} disabled={!canUseReadingControls}>慢速播放</button>
+              <button type="button" className="danger" onClick={handleStopPlayback} disabled={!isAiPlaying}>暂停播放</button>
+              <button type="button" onClick={() => moveSentence(-1)} disabled={!isConnected || atFirstSentence}>上一句</button>
+              <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>下一句</button>
+            </div>
+          </div>
+
+          <div className="learning-section">
+            <div className="section-title-row"><h3>跟读录音区</h3><span>{recordingStatusLabels[recordingStatus]}</span></div>
+            <div className="button-row">
+              <button type="button" className="primary" onClick={() => void handleStartRecording()} disabled={recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'done' ? '重新跟读' : '开始跟读'}</button>
+              <button type="button" onClick={() => void handleStopRecording()} disabled={recordingStatus !== 'recording'}>停止录音</button>
+              <button type="button" onClick={handleResetRecording} disabled={recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>重新录音</button>
+              <button type="button" onClick={() => void handleSubmitAssessment()} disabled={!recordingResult || recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'scoring' ? '正在评分' : '提交评分'}</button>
+              {assessmentResult && <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>再读整句</button>}
+            </div>
+            {recordingResult && <p className="help-text">已录音 {(recordingResult.durationMs / 1000).toFixed(1)} 秒，点击“提交评分”查看发音纠正。</p>}
+          </div>
+
+          {assessmentResult && <div className="assessment-card">
+            <h3>跟读评分</h3>
+            <div className="total-score">总分：{assessmentResult.score.totalScore}</div>
+            <div className="score-grid">
+              <span>准确率：{assessmentResult.score.accuracyScore}</span>
+              <span>流利度：{assessmentResult.score.fluencyScore}</span>
+              <span>完整度：{assessmentResult.score.completenessScore}</span>
+              <span>清晰度：{assessmentResult.score.clarityScore}</span>
+            </div>
+            <p><strong>识别结果：</strong>{assessmentResult.recognizedText || '识别文本为空，请重新录音。'}</p>
+            <div className="issue-list"><strong>问题分析：</strong>{assessmentResult.issues.length ? assessmentResult.issues.map((issue, index) => (
+              <div key={`${issue.type}-${issue.wordIndex}-${index}`} className="issue-item">
+                <span>{index + 1}. {issue.message}</span>
+                <em>{issue.suggestion}</em>
+                <button type="button" className="small" onClick={() => issue.targetWord && handleWordClick({ index: issue.wordIndex ?? index, text: issue.targetWord, normalized: issue.targetWord, status: issue.type })}>听标准发音</button>
+              </div>
+            )) : <p>暂无明显问题，继续保持。</p>}</div>
+            <div className="feedback-box">AI 反馈：{assessmentResult.feedbackText}</div>
+          </div>}
+
+          <div className="button-row session-row">
             <button type="button" className="primary" onClick={() => void handleStart()} disabled={!canStart || isConnecting || !selectedBook}>{startButtonLabel}</button>
-            <button type="button" onClick={handleRepeat} disabled={!isConnected}>重复朗读</button>
             <button type="button" className="danger" onClick={handleStop} disabled={!isConnected && !isConnecting}>{stopButtonLabel}</button>
           </div>
           {noticeMessage && <div className="notice-box">{noticeMessage}</div>}
