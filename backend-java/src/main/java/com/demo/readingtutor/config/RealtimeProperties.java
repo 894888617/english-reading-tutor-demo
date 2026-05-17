@@ -6,9 +6,9 @@ import org.springframework.util.StringUtils;
 @ConfigurationProperties(prefix = "aliyun.dashscope")
 public class RealtimeProperties {
     private String apiKey;
-    private String webrtcEndpoint;
+    private String realtimeWsUrl = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime";
     private String realtimeModel = "qwen3.5-omni-plus-realtime";
-    private String voice = "Ethan";
+    private String voice = "Tina";
 
     public String getApiKey() {
         return apiKey;
@@ -18,12 +18,12 @@ public class RealtimeProperties {
         this.apiKey = apiKey;
     }
 
-    public String getWebrtcEndpoint() {
-        return webrtcEndpoint;
+    public String getRealtimeWsUrl() {
+        return realtimeWsUrl;
     }
 
-    public void setWebrtcEndpoint(String webrtcEndpoint) {
-        this.webrtcEndpoint = webrtcEndpoint;
+    public void setRealtimeWsUrl(String realtimeWsUrl) {
+        this.realtimeWsUrl = realtimeWsUrl;
     }
 
     public String getRealtimeModel() {
@@ -44,21 +44,5 @@ public class RealtimeProperties {
 
     public boolean hasApiKey() {
         return StringUtils.hasText(apiKey);
-    }
-
-    public boolean hasWebrtcEndpoint() {
-        return StringUtils.hasText(webrtcEndpoint);
-    }
-
-    public String normalizedEndpointHost() {
-        if (!StringUtils.hasText(webrtcEndpoint)) {
-            return "";
-        }
-        String endpoint = webrtcEndpoint.trim();
-        endpoint = endpoint.replaceFirst("^https?://", "");
-        while (endpoint.endsWith("/")) {
-            endpoint = endpoint.substring(0, endpoint.length() - 1);
-        }
-        return endpoint;
     }
 }

@@ -1,0 +1,304 @@
+export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed';
+export type MicStatus = 'idle' | 'requesting' | 'recording' | 'stopped' | 'failed';
+
+export interface RealtimeDebugEvent {
+  kind: 'status' | 'websocket' | 'event' | 'text' | 'transcript' | 'audio' | 'error';
+  message: string;
+  raw?: unknown;
+}
+
+export interface RealtimeWsOptions {
+  storyTitle: string;
+  currentSentence: string;
+  url?: string;
+  onConnectionStatusChange?: (status: ConnectionStatus) => void;
+  onMicStatusChange?: (status: MicStatus) => void;
+  onDebugEvent?: (event: RealtimeDebugEvent) => void;
+}
+
+type ControlMessage =
+  | { type: 'start_lesson'; storyTitle: string; currentSentence: string }
+  | { type: 'update_sentence'; storyTitle: string; currentSentence: string }
+  | { type: 'repeat_sentence'; currentSentence: string }
+  | { type: 'stop' };
+
+const TARGET_SAMPLE_RATE = 16000;
+const CHUNK_SAMPLES = 1600;
+
+export class RealtimeWsClient {
+  private ws?: WebSocket;
+  private options?: RealtimeWsOptions;
+  private mediaStream?: MediaStream;
+  private audioContext?: AudioContext;
+  private micSource?: MediaStreamAudioSourceNode;
+  private processor?: ScriptProcessorNode;
+  private pendingInputSamples: number[] = [];
+  private playbackContext?: AudioContext;
+  private nextPlaybackTime = 0;
+  private playbackSources: AudioBufferSourceNode[] = [];
+
+  async connect(options: RealtimeWsOptions): Promise<void> {
+    this.options = options;
+    this.emitConnectionStatus('connecting');
+    const url = options.url ?? 'ws://localhost:8080/ws/realtime';
+
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(url);
+      this.ws = ws;
+      ws.binaryType = 'arraybuffer';
+
+      const timeoutId = window.setTimeout(() => {
+        reject(new Error('Timed out connecting to Java realtime WebSocket.'));
+        ws.close();
+      }, 15000);
+
+      ws.onopen = () => {
+        window.clearTimeout(timeoutId);
+        this.emitDebug('websocket', `Connected to ${url}`);
+        this.emitConnectionStatus('connected');
+        this.sendControlMessage({
+          type: 'start_lesson',
+          storyTitle: options.storyTitle,
+          currentSentence: options.currentSentence,
+        });
+        resolve();
+      };
+      ws.onerror = () => {
+        window.clearTimeout(timeoutId);
+        this.emitConnectionStatus('failed');
+        reject(new Error('Browser WebSocket connection failed. Is the Java backend running on port 8080?'));
+      };
+      ws.onclose = () => {
+        this.emitDebug('websocket', 'Browser WebSocket closed.');
+        this.stopMic();
+        this.clearPlaybackQueue();
+        this.emitConnectionStatus('closed');
+      };
+      ws.onmessage = (event) => this.handleMessage(event.data);
+    });
+  }
+
+  async startMic(): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Cannot start microphone before WebSocket is connected.');
+    }
+
+    this.emitMicStatus('requesting');
+    try {
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.audioContext = new AudioContext();
+      this.micSource = this.audioContext.createMediaStreamSource(this.mediaStream);
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.processor.onaudioprocess = (event) => this.handleMicAudio(event.inputBuffer);
+      this.micSource.connect(this.processor);
+      this.processor.connect(this.audioContext.destination);
+      this.emitMicStatus('recording');
+      this.emitDebug('status', 'Microphone started; streaming 16 kHz PCM chunks to Java backend.');
+    } catch (error) {
+      this.emitMicStatus('failed');
+      this.emitDebug('error', `Microphone permission or capture failed: ${String(error)}`);
+      this.stopMic(false);
+      throw error;
+    }
+  }
+
+  stopMic(emitStatus = true): void {
+    this.processor?.disconnect();
+    this.processor = undefined;
+    this.micSource?.disconnect();
+    this.micSource = undefined;
+    this.mediaStream?.getTracks().forEach((track) => track.stop());
+    this.mediaStream = undefined;
+    void this.audioContext?.close().catch(() => undefined);
+    this.audioContext = undefined;
+    this.pendingInputSamples = [];
+    if (emitStatus) {
+      this.emitMicStatus('stopped');
+    }
+  }
+
+  sendControlMessage(message: ControlMessage): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Realtime WebSocket is not open.');
+    }
+    this.ws.send(JSON.stringify(message));
+    this.emitDebug('websocket', `Sent control message: ${message.type}`, message);
+  }
+
+  updateSentence(storyTitle: string, currentSentence: string): void {
+    this.sendControlMessage({ type: 'update_sentence', storyTitle, currentSentence });
+  }
+
+  repeatSentence(currentSentence: string): void {
+    this.sendControlMessage({ type: 'repeat_sentence', currentSentence });
+  }
+
+  close(): void {
+    try {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.sendControlMessage({ type: 'stop' });
+      }
+    } catch (error) {
+      this.emitDebug('error', `Failed to send stop message: ${String(error)}`);
+    }
+    this.stopMic();
+    this.clearPlaybackQueue();
+    this.ws?.close();
+    this.ws = undefined;
+  }
+
+  getWebSocketState(): string {
+    if (!this.ws) {
+      return 'not-created';
+    }
+    return ['connecting', 'open', 'closing', 'closed'][this.ws.readyState] ?? String(this.ws.readyState);
+  }
+
+  private handleMicAudio(inputBuffer: AudioBuffer): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.audioContext) {
+      return;
+    }
+    const channel = inputBuffer.getChannelData(0);
+    const resampled = downsampleFloat32(channel, this.audioContext.sampleRate, TARGET_SAMPLE_RATE);
+    for (const sample of resampled) {
+      this.pendingInputSamples.push(sample);
+    }
+    while (this.pendingInputSamples.length >= CHUNK_SAMPLES) {
+      const chunk = this.pendingInputSamples.splice(0, CHUNK_SAMPLES);
+      this.ws.send(floatTo16BitPcm(chunk));
+      this.emitDebug('audio', `Sent PCM audio chunk: ${CHUNK_SAMPLES} samples.`);
+    }
+  }
+
+  private handleMessage(data: string | ArrayBuffer | Blob): void {
+    if (data instanceof ArrayBuffer) {
+      this.enqueuePcmPlayback(data);
+      return;
+    }
+    if (data instanceof Blob) {
+      void data.arrayBuffer().then((buffer) => this.enqueuePcmPlayback(buffer));
+      return;
+    }
+
+    try {
+      const event = JSON.parse(data);
+      const type = event.type ?? 'unknown';
+      if (type === 'ai_text_delta' && typeof event.text === 'string') {
+        this.emitDebug('text', event.text, event);
+        return;
+      }
+      if (type === 'ai_text_done' && typeof event.text === 'string') {
+        this.emitDebug('text', event.text || '[AI text completed]', event);
+        return;
+      }
+      if (type === 'error') {
+        this.emitDebug('error', event.message ?? 'Unknown realtime error.', event);
+        return;
+      }
+      if (type === 'dashscope_event') {
+        const innerType = event.event?.type ?? 'unknown';
+        this.emitDebug('event', `DashScope event: ${innerType}`, event.event);
+        const transcript = event.event?.transcript ?? event.event?.item?.content?.[0]?.transcript;
+        if (typeof transcript === 'string' && transcript) {
+          this.emitDebug('transcript', `Student transcript: ${transcript}`, event.event);
+        }
+        return;
+      }
+      this.emitDebug('status', event.message ?? `Realtime event: ${type}`, event);
+    } catch (error) {
+      this.emitDebug('event', `Non-JSON WebSocket message: ${String(data)}`, error);
+    }
+  }
+
+  private enqueuePcmPlayback(arrayBuffer: ArrayBuffer): void {
+    const samples = new Int16Array(arrayBuffer);
+    if (samples.length === 0) {
+      return;
+    }
+    const context = this.getPlaybackContext();
+    const audioBuffer = context.createBuffer(1, samples.length, TARGET_SAMPLE_RATE);
+    const output = audioBuffer.getChannelData(0);
+    for (let index = 0; index < samples.length; index += 1) {
+      output[index] = Math.max(-1, Math.min(1, samples[index] / 32768));
+    }
+
+    const source = context.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(context.destination);
+    source.onended = () => {
+      this.playbackSources = this.playbackSources.filter((item) => item !== source);
+    };
+
+    const startAt = Math.max(context.currentTime + 0.02, this.nextPlaybackTime);
+    source.start(startAt);
+    this.nextPlaybackTime = startAt + audioBuffer.duration;
+    this.playbackSources.push(source);
+    this.emitDebug('audio', `Queued AI PCM audio chunk: ${samples.length} samples.`);
+  }
+
+  private getPlaybackContext(): AudioContext {
+    if (!this.playbackContext || this.playbackContext.state === 'closed') {
+      this.playbackContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+      this.nextPlaybackTime = this.playbackContext.currentTime;
+    }
+    if (this.playbackContext.state === 'suspended') {
+      void this.playbackContext.resume();
+    }
+    return this.playbackContext;
+  }
+
+  private clearPlaybackQueue(): void {
+    this.playbackSources.forEach((source) => {
+      try {
+        source.stop();
+      } catch {
+        // Source may already have ended.
+      }
+    });
+    this.playbackSources = [];
+    this.nextPlaybackTime = 0;
+    void this.playbackContext?.close().catch(() => undefined);
+    this.playbackContext = undefined;
+  }
+
+  private emitConnectionStatus(status: ConnectionStatus): void {
+    this.options?.onConnectionStatusChange?.(status);
+  }
+
+  private emitMicStatus(status: MicStatus): void {
+    this.options?.onMicStatusChange?.(status);
+  }
+
+  private emitDebug(kind: RealtimeDebugEvent['kind'], message: string, raw?: unknown): void {
+    this.options?.onDebugEvent?.({ kind, message, raw });
+  }
+}
+
+function downsampleFloat32(input: Float32Array, sourceRate: number, targetRate: number): number[] {
+  if (sourceRate === targetRate) {
+    return Array.from(input);
+  }
+  const ratio = sourceRate / targetRate;
+  const outputLength = Math.floor(input.length / ratio);
+  const output: number[] = [];
+  for (let index = 0; index < outputLength; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(Math.floor((index + 1) * ratio), input.length);
+    let sum = 0;
+    for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+      sum += input[sourceIndex];
+    }
+    output.push(sum / Math.max(1, end - start));
+  }
+  return output;
+}
+
+function floatTo16BitPcm(samples: number[]): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return buffer;
+}

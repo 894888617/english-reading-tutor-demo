@@ -4,6 +4,6 @@ server:
 aliyun:
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}
-    webrtc-endpoint: ${ALIYUN_WEBRTC_ENDPOINT:}
+    realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
     realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
-    voice: ${REALTIME_VOICE:Ethan}
+    voice: ${REALTIME_VOICE:Tina}
