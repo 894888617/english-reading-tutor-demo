@@ -57,16 +57,14 @@ public class RealtimeWebSocketHandler extends BinaryWebSocketHandler {
             String type = payload.path("type").asText("");
             switch (type) {
                 case "start_lesson" -> dashScopeSession.startLesson(
-                        payload.path("storyTitle").asText(""),
-                        payload.path("englishTitle").asText(""),
-                        payload.path("currentSentence").path("english").asText(""),
-                        payload.path("currentSentence").path("chinese").asText("")
+                        payload.path("book"),
+                        payload.path("pageNo").asInt(1),
+                        payload.path("currentSentence")
                 );
                 case "update_sentence" -> dashScopeSession.updateSentence(
-                        payload.path("storyTitle").asText(""),
-                        payload.path("englishTitle").asText(""),
-                        payload.path("currentSentence").path("english").asText(""),
-                        payload.path("currentSentence").path("chinese").asText("")
+                        payload.path("book"),
+                        payload.path("pageNo").asInt(1),
+                        payload.path("currentSentence")
                 );
                 case "repeat_sentence" -> dashScopeSession.repeatSentence(
                         payload.path("currentSentence").path("english").asText(""),

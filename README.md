@@ -153,16 +153,25 @@ http://localhost:5173
 
 ## 前后端 WebSocket 协议
 
-前端发送 JSON 控制消息：
+前端发送 JSON 控制消息。`start_lesson` 和 `update_sentence` 会携带当前上传绘本的标题、等级、页码、英文句子、中文释义和重点词，Java 后端据此动态生成中文讲解式 AI Prompt。
 
 ```json
 {
   "type": "start_lesson",
-  "storyTitle": "小兔子",
-  "englishTitle": "The Little Rabbit",
+  "book": {
+    "id": "book_001",
+    "title": "小兔子",
+    "englishTitle": "The Little Rabbit",
+    "level": "初学者"
+  },
+  "pageNo": 1,
   "currentSentence": {
     "english": "The little rabbit is looking for his red hat.",
-    "chinese": "小兔子正在找他的红帽子。"
+    "chinese": "小兔子正在找他的红帽子。",
+    "keywords": [
+      { "word": "rabbit", "meaning": "小兔子" },
+      { "word": "red hat", "meaning": "红帽子" }
+    ]
   }
 }
 ```
@@ -170,11 +179,20 @@ http://localhost:5173
 ```json
 {
   "type": "update_sentence",
-  "storyTitle": "小兔子",
-  "englishTitle": "The Little Rabbit",
+  "book": {
+    "id": "book_001",
+    "title": "小兔子",
+    "englishTitle": "The Little Rabbit",
+    "level": "初学者"
+  },
+  "pageNo": 1,
   "currentSentence": {
     "english": "He asks the bird, have you seen my hat?",
-    "chinese": "他问鸟儿：你见过我的帽子吗？"
+    "chinese": "他问鸟儿：你见过我的帽子吗？",
+    "keywords": [
+      { "word": "bird", "meaning": "鸟儿" },
+      { "word": "hat", "meaning": "帽子" }
+    ]
   }
 }
 ```
@@ -280,3 +298,73 @@ API Key 属于服务端密钥。前端只发送控制消息和 PCM 音频给 Jav
 ### 4. AI 回答跑题怎么办？
 
 开始课程和切换句子时，Java 后端都会发送中文教学 `session.update`，其中 `instructions` 明确要求 AI 主要使用中文，按“中文说明当前句子 → 朗读英文 → 中文解释 → 讲重点词 → 带读 → 问一个简单问题”的流程教学，只围绕当前绘本和当前句子讲解、提问、纠错，不做开放闲聊。
+
+## 绘本上传说明
+
+当前 Demo 支持：
+
+- 普通 PDF 文本提取：后端使用 Apache PDFBox 按页提取文本，并按 `. ? !` 自动切分英文句子。
+- JPG / PNG 上传：Demo 阶段会创建绘本页面，并通过 OCR 预留接口提示用户手动填写英文文本。
+- 扫描版 PDF 和图片 OCR 预留：默认 `ocr.provider=mock`，后续可替换为百度 OCR / 腾讯 OCR / 阿里 OCR。
+- 上传后编辑：前端支持修改标题、等级、页面原始文本、英文句子、中文意思和重点词，也可以新增或删除句子。
+
+注意：
+
+- 如果 PDF 是扫描版，可能无法自动提取文本。
+- 如果 OCR 服务未配置，需要手动填写英文句子。
+- 上传后建议先校对英文句子，再开始 AI 学习。
+- Demo 阶段使用本地文件和 JSON 元数据存储，不使用数据库。
+
+本地存储目录：
+
+```text
+backend-java/
+├─ data/
+│  ├─ uploads/   # 原始上传文件
+│  ├─ books/     # book-{bookId}.json
+│  └─ covers/    # 封面图片预留目录
+```
+
+上传限制默认配置：
+
+```yaml
+app:
+  upload:
+    max-file-size-mb: 20
+    max-pdf-pages: 30
+
+ocr:
+  provider: mock
+  baidu:
+    api-key:
+    secret-key:
+  tencent:
+    secret-id:
+    secret-key:
+```
+
+新增绘本接口：
+
+- `POST /api/books/upload`：上传并解析 PDF / JPG / PNG。
+- `GET /api/books`：获取绘本列表；没有上传绘本时返回默认测试绘本。
+- `GET /api/books/{bookId}`：获取完整绘本详情。
+- `PUT /api/books/{bookId}`：保存校对后的绘本内容。
+- `DELETE /api/books/{bookId}`：删除绘本 JSON 和原始上传文件。
+- `GET /api/story`：保留兼容旧 Demo，返回默认测试绘本。
+
+推荐学习流程：
+
+```text
+1. 打开页面
+2. 点击“上传绘本”
+3. 选择 PDF / JPG / PNG
+4. 系统解析
+5. 页面展示解析出的页和句子
+6. 用户校对英文句子、中文意思、关键词
+7. 点击“保存绘本”
+8. 点击“开始学习这本绘本”
+9. AI 按该绘本当前句子进行中文讲解和英文带读
+10. 用户跟读
+11. AI 指出问题和改进建议
+12. 进入下一句
+```

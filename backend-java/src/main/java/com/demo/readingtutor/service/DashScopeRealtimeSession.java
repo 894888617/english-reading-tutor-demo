@@ -34,10 +34,13 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
     private final AtomicBoolean open = new AtomicBoolean(false);
     private final ConcurrentLinkedQueue<String> pendingOutboundMessages = new ConcurrentLinkedQueue<>();
     private volatile WebSocket webSocket;
-    private volatile String storyTitle = "";
+    private volatile String bookTitle = "";
     private volatile String englishTitle = "";
+    private volatile String level = "";
+    private volatile int pageNo = 1;
     private volatile String currentSentenceEnglish = "";
     private volatile String currentSentenceChinese = "";
+    private volatile String currentKeywords = "";
 
     public DashScopeRealtimeSession(
             RealtimeProperties properties,
@@ -114,20 +117,14 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
         sendBrowserError("百炼实时语音 WebSocket 错误：" + error.getMessage());
     }
 
-    public void startLesson(String storyTitle, String englishTitle, String currentSentenceEnglish, String currentSentenceChinese) {
-        this.storyTitle = storyTitle == null ? "" : storyTitle;
-        this.englishTitle = englishTitle == null ? "" : englishTitle;
-        this.currentSentenceEnglish = currentSentenceEnglish == null ? "" : currentSentenceEnglish;
-        this.currentSentenceChinese = currentSentenceChinese == null ? "" : currentSentenceChinese;
+    public void startLesson(JsonNode book, int pageNo, JsonNode currentSentence) {
+        updateContext(book, pageNo, currentSentence);
         sendSessionUpdate();
         sendTextInstruction(INTRO_PROMPT);
     }
 
-    public void updateSentence(String storyTitle, String englishTitle, String currentSentenceEnglish, String currentSentenceChinese) {
-        this.storyTitle = storyTitle == null ? this.storyTitle : storyTitle;
-        this.englishTitle = englishTitle == null ? this.englishTitle : englishTitle;
-        this.currentSentenceEnglish = currentSentenceEnglish == null ? "" : currentSentenceEnglish;
-        this.currentSentenceChinese = currentSentenceChinese == null ? "" : currentSentenceChinese;
+    public void updateSentence(JsonNode book, int pageNo, JsonNode currentSentence) {
+        updateContext(book, pageNo, currentSentence);
         sendSessionUpdate();
         sendTextInstruction("我们进入下一句。请先听我读一遍，再用中文解释意思，并带我跟读：" + this.currentSentenceEnglish);
     }
@@ -138,6 +135,16 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
             this.currentSentenceChinese = currentSentenceChinese;
         }
         sendTextInstruction("请重新朗读这个英文句子，并用中文提醒我跟读：" + sentence);
+    }
+
+    private void updateContext(JsonNode book, int pageNo, JsonNode currentSentence) {
+        this.bookTitle = book.path("title").asText(this.bookTitle);
+        this.englishTitle = book.path("englishTitle").asText(this.englishTitle);
+        this.level = book.path("level").asText(this.level);
+        this.pageNo = pageNo <= 0 ? 1 : pageNo;
+        this.currentSentenceEnglish = currentSentence.path("english").asText("");
+        this.currentSentenceChinese = currentSentence.path("chinese").asText("");
+        this.currentKeywords = formatKeywords(currentSentence.path("keywords"));
     }
 
     public void sendAudio(byte[] pcmBytes) {
@@ -196,63 +203,70 @@ public class DashScopeRealtimeSession implements WebSocket.Listener {
 
     private String buildTutorInstructions() {
         return buildTutorInstructions(
-                storyTitle,
+                bookTitle,
                 englishTitle,
+                level,
+                pageNo,
                 currentSentenceEnglish,
-                currentSentenceChinese
+                currentSentenceChinese,
+                currentKeywords
         );
     }
 
     private String buildTutorInstructions(
-            String storyTitle,
+            String bookTitle,
             String englishTitle,
+            String level,
+            int pageNo,
             String currentSentenceEnglish,
-            String currentSentenceChinese
+            String currentSentenceChinese,
+            String currentKeywords
     ) {
         return "你是一名中文授课的少儿英语阅读老师，正在带 6-10 岁中国孩子阅读英文绘本。\n\n"
-                + "你的教学语言：\n"
-                + "- 默认使用中文讲解。\n"
-                + "- 英文只用于朗读、跟读示范、单词示范和简单练习。\n"
-                + "- 不要长时间全英文输出。\n"
-                + "- 不要开放闲聊。\n"
-                + "- 不要讲复杂语法。\n\n"
-                + "当前故事中文名：\n" + safe(storyTitle) + "\n\n"
-                + "当前故事英文名：\n" + safe(englishTitle) + "\n\n"
+                + "当前绘本中文名：\n" + safe(bookTitle) + "\n\n"
+                + "当前绘本英文名：\n" + safe(englishTitle) + "\n\n"
+                + "当前等级：\n" + safe(level) + "\n\n"
+                + "当前页码：\n第 " + pageNo + " 页\n\n"
                 + "当前英文句子：\n" + safe(currentSentenceEnglish) + "\n\n"
                 + "当前中文意思：\n" + safe(currentSentenceChinese) + "\n\n"
+                + "当前重点词：\n" + safe(currentKeywords) + "\n\n"
+                + "教学语言：\n"
+                + "- 默认用中文讲解。\n"
+                + "- 英文只用于朗读、跟读示范、单词示范和简单练习。\n"
+                + "- 不要长时间全英文输出。\n"
+                + "- 不要开放闲聊。\n\n"
                 + "你的任务：\n"
                 + "1. 用中文告诉学生现在学习哪一句。\n"
                 + "2. 清晰朗读英文句子。\n"
                 + "3. 用中文解释这句话的意思。\n"
-                + "4. 挑出 1-2 个重点英文单词，用中文解释。\n"
+                + "4. 讲解 1-2 个重点词。\n"
                 + "5. 带学生跟读英文句子。\n"
-                + "6. 问一个非常简单的理解问题。\n"
-                + "7. 学生回答错误时，先鼓励，再用中文纠正。\n"
-                + "8. 学生读音不清楚时，温和提醒，并给出正确示范。\n"
-                + "9. 每次回答要短，不要一次讲太多。\n"
+                + "6. 学生跟读后，根据学生表现指出问题。\n"
+                + "7. 给出具体改进建议。\n"
+                + "8. 如果学生读得可以，鼓励并提示进入下一句。\n"
+                + "9. 每次回答要短。\n"
                 + "10. 一次只问一个问题。\n\n"
-                + "回答风格：\n"
-                + "- 像耐心的中文英语老师。\n"
-                + "- 语言简单。\n"
-                + "- 语气鼓励。\n"
-                + "- 适合小学生。\n"
-                + "- 不要说太长。\n"
-                + "- 不要输出与当前绘本无关的内容。\n\n"
-                + "推荐教学话术：\n"
-                + "- “我们先来看这一句……”\n"
-                + "- “这句话的意思是……”\n"
-                + "- “这个单词的意思是……”\n"
-                + "- “请跟我读……”\n"
-                + "- “很好，再来一遍。”\n"
-                + "- “没关系，我们慢慢来。”\n"
-                + "- “我问你一个小问题……”\n"
-                + "- “你可以这样回答……”\n\n"
                 + "限制：\n"
-                + "- 不要变成纯聊天。\n"
-                + "- 不要讲和绘本无关的内容。\n"
-                + "- 不要一次提多个问题。\n"
-                + "- 不要输出大段英文解释。\n"
-                + "- 不要让孩子感到被批评。";
+                + "- 只能围绕当前绘本内容讲解。\n"
+                + "- 不要讲无关内容。\n"
+                + "- 不要一次输出太多。\n"
+                + "- 不要变成自由聊天。";
+    }
+
+    private String formatKeywords(JsonNode keywordsNode) {
+        if (keywordsNode == null || !keywordsNode.isArray() || keywordsNode.isEmpty()) {
+            return "无";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (JsonNode keyword : keywordsNode) {
+            if (!builder.isEmpty()) {
+                builder.append("；");
+            }
+            builder.append(keyword.path("word").asText(""))
+                    .append("：")
+                    .append(keyword.path("meaning").asText(""));
+        }
+        return builder.toString();
     }
 
     private String safe(String value) {

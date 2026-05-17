@@ -1,4 +1,4 @@
-import type { Sentence } from './story';
+import type { Book, Sentence } from './story';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed';
 export type MicStatus = 'idle' | 'requesting' | 'recording' | 'stopped' | 'failed';
@@ -10,8 +10,8 @@ export interface RealtimeDebugEvent {
 }
 
 export interface RealtimeWsOptions {
-  storyTitle: string;
-  englishTitle: string;
+  book: Book;
+  pageNo: number;
   currentSentence: Sentence;
   url?: string;
   onConnectionStatusChange?: (status: ConnectionStatus) => void;
@@ -20,8 +20,8 @@ export interface RealtimeWsOptions {
 }
 
 type ControlMessage =
-  | { type: 'start_lesson'; storyTitle: string; englishTitle: string; currentSentence: Sentence }
-  | { type: 'update_sentence'; storyTitle: string; englishTitle: string; currentSentence: Sentence }
+  | { type: 'start_lesson'; book: Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'>; pageNo: number; currentSentence: Sentence }
+  | { type: 'update_sentence'; book: Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'>; pageNo: number; currentSentence: Sentence }
   | { type: 'repeat_sentence'; currentSentence: Sentence }
   | { type: 'stop' };
 
@@ -61,8 +61,8 @@ export class RealtimeWsClient {
         this.emitConnectionStatus('connected');
         this.sendControlMessage({
           type: 'start_lesson',
-          storyTitle: options.storyTitle,
-          englishTitle: options.englishTitle,
+          book: bookContext(options.book),
+          pageNo: options.pageNo,
           currentSentence: options.currentSentence,
         });
         resolve();
@@ -129,8 +129,8 @@ export class RealtimeWsClient {
     this.emitDebug('websocket', `已发送控制消息：${message.type}`, message);
   }
 
-  updateSentence(storyTitle: string, englishTitle: string, currentSentence: Sentence): void {
-    this.sendControlMessage({ type: 'update_sentence', storyTitle, englishTitle, currentSentence });
+  updateSentence(book: Book, pageNo: number, currentSentence: Sentence): void {
+    this.sendControlMessage({ type: 'update_sentence', book: bookContext(book), pageNo, currentSentence });
   }
 
   repeatSentence(currentSentence: Sentence): void {
@@ -305,4 +305,13 @@ function floatTo16BitPcm(samples: number[]): ArrayBuffer {
     view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
   }
   return buffer;
+}
+
+function bookContext(book: Book): Pick<Book, 'id' | 'title' | 'englishTitle' | 'level'> {
+  return {
+    id: book.id,
+    title: book.title,
+    englishTitle: book.englishTitle,
+    level: book.level,
+  };
 }

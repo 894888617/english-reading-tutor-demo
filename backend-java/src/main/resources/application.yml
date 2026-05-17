@@ -7,3 +7,24 @@ aliyun:
     realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
     realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
     voice: ${REALTIME_VOICE:Tina}
+
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+app:
+  upload:
+    max-file-size-mb: 20
+    max-pdf-pages: 30
+
+ocr:
+  provider: mock
+  baidu:
+    api-key: 
+    secret-key: 
+  tencent:
+    secret-id: 
+    secret-key: 
