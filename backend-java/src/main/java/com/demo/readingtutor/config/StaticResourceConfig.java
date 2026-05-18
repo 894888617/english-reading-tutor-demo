@@ -26,18 +26,18 @@ public class StaticResourceConfig implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/**")
-                .allowedOrigins("http://localhost:5173", "http://127.0.0.1:5173")
+        registry.addMapping("/**")
+                .allowedOriginPatterns(
+                        "https://aienglish.wmhkl.com",
+                        "http://aienglish.wmhkl.com",
+                        "http://localhost:*",
+                        "http://127.0.0.1:*"
+                )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*");
-        registry.addMapping("/audio-cache/**")
-                .allowedOrigins("http://localhost:5173", "http://127.0.0.1:5173")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*");
-        registry.addMapping("/ws/**")
-                .allowedOrigins("http://localhost:5173", "http://127.0.0.1:5173")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*");
+                .allowedHeaders("*")
+                .exposedHeaders("*")
+                .allowCredentials(true)
+                .maxAge(3600);
     }
 
     @Override
