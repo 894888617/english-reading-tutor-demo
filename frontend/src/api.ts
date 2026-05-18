@@ -122,10 +122,19 @@ export async function assessReading(input: {
   sentenceIndex?: number;
   recognizedText?: string;
 }): Promise<ReadingAssessmentResult> {
+  const referenceText = input.targetText.trim();
+  if (!referenceText) {
+    throw new Error('referenceText 不能为空，请先选择当前句子的英文原文。');
+  }
+  if (input.audio.size === 0) {
+    throw new Error('录音文件为空，请重新录音');
+  }
+
   const form = new FormData();
-  const extension = input.audio.type.includes('wav') ? 'wav' : 'webm';
+  const extension = input.audio.type.includes('wav') ? 'wav' : input.audio.type.includes('mp4') ? 'mp4' : 'webm';
+  // 必须上传真实录音 Blob 二进制；不要只传 audioUrl 或浏览器本地 blob URL。
   form.append('file', input.audio, `reading.${extension}`);
-  form.append('referenceText', input.targetText);
+  form.append('referenceText', referenceText);
   form.append('bookId', input.bookId ?? '');
   form.append('pageId', String(input.pageNo ?? 1));
   form.append('sentenceId', String(input.sentenceIndex ?? 0));

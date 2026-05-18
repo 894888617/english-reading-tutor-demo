@@ -67,8 +67,13 @@ public class IflytekSpeechEvalWebSocketClient {
                     try {
                         JsonNode node = objectMapper.readTree(message);
                         int code = node.path("code").asInt(0);
+                        String responseMessage = node.path("message").asText("");
+                        log.info("Iflytek speech evaluation response code={} message={}", code, responseMessage);
                         if (code != 0) {
-                            failure.set(new ResponseStatusException(mapIflytekStatus(code), mapIflytekMessage(code, node.path("message").asText(""))));
+                            if (responseMessage.contains("param validate error")) {
+                                log.warn("Iflytek param validate error; sent request field structure={}", safeFieldStructure(audioFile, referenceText, language, sentenceId, userId, vendor.getAppId()));
+                            }
+                            failure.set(new ResponseStatusException(mapIflytekStatus(code), mapIflytekMessage(code, responseMessage)));
                             done.countDown();
                         } else if (node.path("data").path("status").asInt(-1) == 2 || node.path("status").asInt(-1) == 2) {
                             done.countDown();
@@ -90,11 +95,12 @@ public class IflytekSpeechEvalWebSocketClient {
         };
 
         try {
+            String requestBody = buildRequest(audioFile, referenceText, language, sentenceId, userId, vendor.getAppId(), vendor.getEndpoint());
             WebSocket webSocket = httpClient.newWebSocketBuilder()
                     .connectTimeout(Duration.ofSeconds(20))
                     .buildAsync(signedUri, listener)
                     .join();
-            webSocket.sendText(buildRequest(audioFile, referenceText, language, sentenceId, userId, vendor.getAppId()), true).join();
+            webSocket.sendText(requestBody, true).join();
             if (!done.await(90, TimeUnit.SECONDS)) {
                 webSocket.abort();
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测服务连接失败");
@@ -151,7 +157,16 @@ public class IflytekSpeechEvalWebSocketClient {
         }
     }
 
-    private String buildRequest(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId) throws Exception {
+    private String buildRequest(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId, String endpoint) throws Exception {
+        byte[] audioBytes = audioFile == null ? new byte[0] : audioFile;
+        if (audioBytes.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "录音文件为空，请重新录音");
+        }
+        String audioBase64 = Base64.getEncoder().encodeToString(audioBytes);
+        if (!StringUtils.hasText(audioBase64)) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "录音编码失败");
+        }
+
         Map<String, Object> business = new LinkedHashMap<>();
         business.put("category", "read_sentence");
         business.put("sub", "ise");
@@ -166,16 +181,48 @@ public class IflytekSpeechEvalWebSocketClient {
         if (StringUtils.hasText(userId)) {
             business.put("user_id", userId);
         }
+        log.info("Iflytek speech evaluation request endpoint={} referenceText={} audioBytesLength={} audioBase64Length={} business={}",
+                endpoint, referenceText, audioBytes.length, audioBase64.length(), business);
         return objectMapper.writeValueAsString(Map.of(
                 "common", Map.of("app_id", appId),
                 "business", business,
                 "data", Map.of(
                         "status", 2,
-                        "format", "audio/L16;rate=16000",
-                        "audio", Base64.getEncoder().encodeToString(audioFile),
-                        "encoding", "raw"
+                        "audio", audioBase64
                 )
         ));
+    }
+
+    private String safeFieldStructure(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId) {
+        Map<String, Object> business = new LinkedHashMap<>();
+        business.put("category", "read_sentence");
+        business.put("sub", "ise");
+        business.put("ent", normalizeLanguage(language));
+        business.put("cmd", "ssb");
+        business.put("auf", "audio/L16;rate=16000");
+        business.put("aue", "raw");
+        business.put("text", referenceText == null ? "" : referenceText);
+        if (StringUtils.hasText(sentenceId)) {
+            business.put("sentence_id", sentenceId);
+        }
+        if (StringUtils.hasText(userId)) {
+            business.put("user_id", userId);
+        }
+        int audioBytesLength = audioFile == null ? 0 : audioFile.length;
+        int audioBase64Length = audioBytesLength == 0 ? 0 : Base64.getEncoder().encodeToString(audioFile).length();
+        Map<String, Object> safeData = new LinkedHashMap<>();
+        safeData.put("status", 2);
+        safeData.put("audio", Map.of("base64Length", audioBase64Length));
+        safeData.put("audioBytesLength", audioBytesLength);
+        Map<String, Object> structure = new LinkedHashMap<>();
+        structure.put("common", Map.of("app_id", StringUtils.hasText(appId) ? "configured" : "missing"));
+        structure.put("business", business);
+        structure.put("data", safeData);
+        try {
+            return objectMapper.writeValueAsString(structure);
+        } catch (Exception ex) {
+            return structure.toString();
+        }
     }
 
     private JsonNode combineMessages(List<String> messages) throws Exception {

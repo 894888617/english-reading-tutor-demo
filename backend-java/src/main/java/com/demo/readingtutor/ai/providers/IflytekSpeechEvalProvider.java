@@ -48,11 +48,22 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "语音评测服务未配置");
         }
         try {
+            byte[] audioBytes = audioFile == null ? new byte[0] : audioFile;
+            if (audioBytes.length == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "录音文件为空，请重新录音");
+            }
+            String audioBase64 = Base64.getEncoder().encodeToString(audioBytes);
+            if (!StringUtils.hasText(audioBase64)) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "录音编码失败");
+            }
+            log.info("Speech evaluation request endpoint={} referenceText={} audioBytesLength={} audioBase64Length={}",
+                    vendor.getEndpoint(), referenceText, audioBytes.length, audioBase64.length());
+
             JsonNode root;
             if (vendor.getEndpoint().startsWith("wss://") || vendor.getEndpoint().startsWith("ws://")) {
-                root = webSocketClient.evaluate(audioFile, referenceText, language, sentenceId, userId, vendor);
+                root = webSocketClient.evaluate(audioBytes, referenceText, language, sentenceId, userId, vendor);
             } else {
-                root = evaluateByHttp(audioFile, referenceText, language, sentenceId, userId, vendor);
+                root = evaluateByHttp(audioBase64, referenceText, language, sentenceId, userId, vendor);
             }
             return parseResult(root);
         } catch (ResponseStatusException ex) {
@@ -63,14 +74,24 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
         }
     }
 
-    private JsonNode evaluateByHttp(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, AssessmentProperties.Vendor vendor) throws Exception {
+    private JsonNode evaluateByHttp(String audioBase64, String referenceText, String language, String sentenceId, String userId, AssessmentProperties.Vendor vendor) throws Exception {
+        Map<String, Object> business = Map.of(
+                "category", "read_sentence",
+                "sub", "ise",
+                "ent", "zh".equalsIgnoreCase(language) || "Chinese".equalsIgnoreCase(language) ? "cn_vip" : "en_vip",
+                "cmd", "ssb",
+                "auf", "audio/L16;rate=16000",
+                "aue", "raw",
+                "text", referenceText == null ? "" : referenceText
+        );
+        log.info("Speech evaluation HTTP request business={}", business);
         String body = objectMapper.writeValueAsString(Map.of(
-                "appId", vendor.getAppId(),
-                "referenceText", referenceText,
-                "language", language,
-                "sentenceId", sentenceId == null ? "" : sentenceId,
-                "userId", userId == null ? "" : userId,
-                "audio", Base64.getEncoder().encodeToString(audioFile)
+                "common", Map.of("app_id", vendor.getAppId()),
+                "business", business,
+                "data", Map.of(
+                        "status", 2,
+                        "audio", audioBase64
+                )
         ));
         HttpRequest request = HttpRequest.newBuilder(URI.create(vendor.getEndpoint()))
                 .timeout(Duration.ofSeconds(90))

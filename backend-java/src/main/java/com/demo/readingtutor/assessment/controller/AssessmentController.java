@@ -24,18 +24,14 @@ public class AssessmentController {
     @PostMapping(value = "/api/speech/evaluate", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ReadingAssessmentResult evaluateSpeech(
             @RequestParam(value = "file", required = false) MultipartFile file,
-            @RequestParam(value = "audio", required = false) MultipartFile audio,
             @RequestParam(value = "referenceText", required = false) String referenceText,
-            @RequestParam(value = "targetText", required = false) String targetText,
             @RequestParam(value = "sentenceId", required = false) String sentenceId,
             @RequestParam(value = "bookId", required = false) String bookId,
             @RequestParam(value = "pageId", required = false) String pageId,
             @RequestParam(value = "recognizedText", required = false) String recognizedText
     ) {
-        MultipartFile upload = file != null ? file : audio;
-        String text = StringUtils.hasText(referenceText) ? referenceText : targetText;
-        validate(upload, text);
-        return assessmentService.assess(upload, text, recognizedText);
+        validate(file, referenceText, "file");
+        return assessmentService.assess(file, referenceText.trim(), recognizedText);
     }
 
     @PostMapping(value = "/api/assessment/reading", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -44,7 +40,7 @@ public class AssessmentController {
             @RequestParam("targetText") String targetText,
             @RequestParam(value = "recognizedText", required = false) String recognizedText
     ) {
-        validate(audio, targetText);
+        validate(audio, targetText, "audio");
         return assessmentService.assess(audio, targetText, recognizedText);
     }
 
@@ -53,12 +49,15 @@ public class AssessmentController {
         return recordService.get(id);
     }
 
-    private void validate(MultipartFile audio, String targetText) {
-        if (audio == null || audio.isEmpty()) {
-            throw new IllegalArgumentException("评分失败：没有收到录音文件，请重新录音。");
+    private void validate(MultipartFile audio, String targetText, String fileFieldName) {
+        if (audio == null) {
+            throw new IllegalArgumentException("请使用 multipart/form-data 上传字段名为 " + fileFieldName + " 的录音文件。");
+        }
+        if (audio.isEmpty()) {
+            throw new IllegalArgumentException("录音文件为空，请重新录音");
         }
         if (!StringUtils.hasText(targetText)) {
-            throw new IllegalArgumentException("当前没有可朗读的句子。");
+            throw new IllegalArgumentException("referenceText 不能为空，请传当前句子的英文原文。");
         }
         long maxBytes = Math.max(1, properties.getMaxAudioSizeMb()) * 1024L * 1024L;
         if (audio.getSize() > maxBytes) {
