@@ -121,6 +121,7 @@ export async function assessReading(input: {
   pageNo?: number;
   sentenceIndex?: number;
   recognizedText?: string;
+  mimeType?: string;
 }): Promise<ReadingAssessmentResult> {
   const referenceText = input.targetText.trim();
   if (!referenceText) {
@@ -131,13 +132,15 @@ export async function assessReading(input: {
   }
 
   const form = new FormData();
-  const extension = input.audio.type.includes('wav') ? 'wav' : input.audio.type.includes('mp4') ? 'mp4' : 'webm';
+  const actualMimeType = input.mimeType || input.audio.type || 'audio/webm';
+  const extension = audioExtension(actualMimeType);
   // 必须上传真实录音 Blob 二进制；不要只传 audioUrl 或浏览器本地 blob URL。
-  form.append('file', input.audio, `reading.${extension}`);
+  form.append('file', input.audio, `recording.${extension}`);
   form.append('referenceText', referenceText);
   form.append('bookId', input.bookId ?? '');
   form.append('pageId', String(input.pageNo ?? 1));
   form.append('sentenceId', String(input.sentenceIndex ?? 0));
+  form.append('mimeType', actualMimeType);
   if (input.recognizedText) {
     form.append('recognizedText', input.recognizedText);
   }
@@ -177,6 +180,15 @@ export async function getTtsVoices(): Promise<TtsVoice[]> {
   return response.json();
 }
 
+function audioExtension(mimeType: string) {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes('wav')) return 'wav';
+  if (normalized.includes('mp4')) return 'mp4';
+  if (normalized.includes('mpeg') || normalized.includes('mp3')) return 'mp3';
+  if (normalized.includes('ogg')) return 'ogg';
+  return 'webm';
+}
+
 export async function synthesizeTts(input: {
   text: string;
   language: 'English' | 'Chinese' | 'en' | 'zh';
@@ -188,12 +200,19 @@ export async function synthesizeTts(input: {
   bookId?: string;
   pageId?: string;
   sentenceId?: string;
+  forceRefresh?: boolean;
 }): Promise<TtsResult> {
   const response = await fetch(`${API_BASE_URL}/tts/synthesize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}
+
+export async function clearTtsCache(): Promise<{ success: boolean; deleted: number }> {
+  const response = await fetch(`${API_BASE_URL}/tts/cache/clear`, { method: 'POST' });
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }

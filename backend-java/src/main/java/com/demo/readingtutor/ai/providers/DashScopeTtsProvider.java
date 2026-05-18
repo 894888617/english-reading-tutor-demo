@@ -55,15 +55,18 @@ public class DashScopeTtsProvider implements TtsProvider {
         tts.requireVoice(voice, model);
         String language = normalizeLanguage(input.language());
         String format = StringUtils.hasText(input.format()) ? input.format() : tts.getFormat();
-        double speed = input.speed() == null ? tts.getSpeed() : input.speed();
-        double pitch = input.pitch() == null ? tts.getPitch() : input.pitch();
-        double volume = input.volume() == null ? tts.getVolume() : input.volume();
+        double speed = clamp(input.speed() == null ? tts.getSpeed() : input.speed(), 0.5, 1.5);
+        double pitch = clamp(input.pitch() == null ? tts.getPitch() : input.pitch(), 0.5, 1.5);
+        double volume = clamp(input.volume() == null ? tts.getVolume() : input.volume(), 0.0, 1.0);
         var key = cache.buildKey(model, voice, language, speed, pitch, volume, format, text);
-        var cached = cache.find(key);
+        var cached = Boolean.TRUE.equals(input.forceRefresh()) ? java.util.Optional.<String>empty() : cache.find(key);
         if (cached.isPresent()) {
+            long fileSize = cache.fileSize(key);
+            log.info("[TTS] result audioUrl={} cacheHit={} fileSize={}", cached.get(), true, fileSize);
             return new TtsResult(cached.get(), true, null, "dashscope", model, voice, language, speed, pitch, volume, format);
         }
-        log.info("TTS synthesize request model={} voice={} language={} speed={} pitch={} volume={}", model, voice, language, speed, pitch, volume);
+        log.info("[TTS] request textLength={} model={} voice={} language={} speed={} pitch={} volume={} format={}",
+                text.length(), model, voice, language, speed, pitch, volume, format);
         long startedAt = Instant.now().toEpochMilli();
         try {
             String body = objectMapper.writeValueAsString(Map.of(
@@ -107,6 +110,7 @@ public class DashScopeTtsProvider implements TtsProvider {
             validateAudioBytes(bytes, format);
             String localUrl = cache.put(key, bytes);
             long durationMs = Math.max(0, Instant.now().toEpochMilli() - startedAt);
+            log.info("[TTS] result audioUrl={} cacheHit={} fileSize={}", localUrl, false, bytes.length);
             return new TtsResult(localUrl, false, durationMs, "dashscope", model, voice, language, speed, pitch, volume, format);
         } catch (ResponseStatusException ex) {
             throw ex;
@@ -115,6 +119,11 @@ public class DashScopeTtsProvider implements TtsProvider {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败，请稍后重试", ex);
         }
     }
+    private double clamp(double value, double min, double max) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) return min;
+        return Math.max(min, Math.min(max, value));
+    }
+
     private String normalizeLanguage(String language) {
         if (!StringUtils.hasText(language)) {
             return tts.getLanguage();

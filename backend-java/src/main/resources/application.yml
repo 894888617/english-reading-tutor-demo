@@ -65,3 +65,10 @@ tts:
   cache-driver: ${AUDIO_CACHE_DRIVER:local}
   cache-dir: ${AUDIO_CACHE_DIR:./storage/audio-cache}
   cache-ttl-days: ${AUDIO_CACHE_TTL_DAYS:365}
+
+audio:
+  ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+  target-sample-rate: ${AUDIO_TARGET_SAMPLE_RATE:16000}
+  target-channels: ${AUDIO_TARGET_CHANNELS:1}
+  target-format: ${AUDIO_TARGET_FORMAT:pcm}
+  temp-dir: ${AUDIO_TEMP_DIR:./storage/audio-temp}

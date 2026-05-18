@@ -1,6 +1,8 @@
 package com.demo.readingtutor.config;
 
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.config.annotation.ContentNegotiationConfigurer;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -13,6 +15,12 @@ public class StaticResourceConfig implements WebMvcConfigurer {
 
     public StaticResourceConfig(TtsProperties ttsProperties) {
         this.ttsProperties = ttsProperties;
+    }
+
+    @Override
+    public void configureContentNegotiation(ContentNegotiationConfigurer configurer) {
+        configurer.mediaType("mp3", MediaType.valueOf("audio/mpeg"));
+        configurer.mediaType("wav", MediaType.valueOf("audio/wav"));
     }
 
     @Override

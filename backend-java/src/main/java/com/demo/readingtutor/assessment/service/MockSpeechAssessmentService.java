@@ -41,7 +41,7 @@ public class MockSpeechAssessmentService implements SpeechAssessmentService {
         int clarity = clamp(issueCount == 0 ? 92 : 88 - (int) wrong * 7);
         int total = (int) Math.round(accuracy * 0.35 + fluency * 0.25 + completeness * 0.25 + clarity * 0.15);
         ReadingScore score = new ReadingScore(total, accuracy, fluency, completeness, clarity);
-        return new ReadingAssessmentResult(null, safeTarget, safeRecognized, score, diff.wordResults(), diff.issues(), feedback(score, diff.issues()), null);
+        return new ReadingAssessmentResult(null, safeTarget, safeRecognized, score, diff.wordResults(), diff.issues(), feedback(score, diff.issues()), null, null, false);
     }
 
     private String mockRecognizedText(String targetText) {

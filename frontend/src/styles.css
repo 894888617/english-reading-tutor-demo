@@ -729,3 +729,33 @@ select {
   color: #445;
   font-size: 13px;
 }
+
+.recording-player,
+.assessment-audio-grid {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.recording-player audio,
+.assessment-audio-grid audio {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.assessment-audio-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.warning-text {
+  color: #9a3412;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
