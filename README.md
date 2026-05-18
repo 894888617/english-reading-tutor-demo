@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | OCR | `OCR_PROVIDER=dashscope`，`OCR_MODEL=qwen-vl-ocr-2025-11-20` | 图片与扫描 PDF 页面调用 DashScope Qwen-OCR；普通 PDF 优先提取内嵌文本。 |
 | 绘本朗读 | `TTS_PROVIDER=dashscope`，`TTS_MODEL=qwen3-tts-flash` | 固定文本走非实时 TTS，并写入本地音频缓存。 |
-| 跟读评分 | `SPEECH_EVAL_PROVIDER=iflytek` | 预留讯飞/专业口语评测 HTTP 端点；未配置账号时直接报“语音评测服务未配置”。 |
+| 跟读评分 | `SPEECH_EVAL_PROVIDER=iflytek` | 讯飞语音评测 `wss://` endpoint 通过 WebSocket 鉴权与传输；未配置账号时直接报“语音评测服务未配置”。 |
 | 发音纠错 | 语音评测返回的 word-level 结果 | 前端按 word status 标红错词，点击错词走 TTS 标准发音。 |
 | 短语音反馈 | 规则短反馈 + TTS | 跟读完成后生成儿童友好短句，并通过 TTS 缓存播放。 |
 | 实时翻译 | `qwen3-livetranslate-flash-realtime` | 独立 session 接口，不用于跟读评分。 |
@@ -72,6 +72,9 @@ REALTIME_TUTOR_INTERRUPT_ENABLED=true
 AUDIO_CACHE_DRIVER=local
 AUDIO_CACHE_DIR=./storage/audio-cache
 AUDIO_CACHE_TTL_DAYS=365
+
+# 前端开发环境访问 Java 后端静态音频与 API
+VITE_API_BASE_URL=http://localhost:8080
 ```
 
 > 本地开发如确需保留模拟评测/OCR，必须同时显式设置 `ENABLE_AI_MOCK=true` 与相应 mock provider；生产环境保持 `ENABLE_AI_MOCK=false`。
@@ -95,9 +98,9 @@ AUDIO_CACHE_TTL_DAYS=365
 ```json
 {
   "text": "The little rabbit is looking for his red hat.",
-  "language": "en",
-  "voice": "Cherry",
-  "speed": 0.9,
+  "language": "English",
+  "voice": "Serena",
+  "speed": 0.75,
   "pitch": 1.0,
   "volume": 1.0,
   "bookId": "book_xxx",
@@ -106,9 +109,32 @@ AUDIO_CACHE_TTL_DAYS=365
 }
 ```
 
-返回包含 `audioUrl`、`cacheHit`、`model`、`voice`。缓存 key 包含 `textHash + model + voice + speed + pitch + volume + language + format`，切换音色或语速不会命中旧音频。
+返回包含 `audioUrl`、`cacheHit`、`durationMs`、`provider`、`model`、`voice`、`language`、`speed`、`pitch`、`volume`、`format`。缓存 key 包含 `textHash + model + voice + speed + pitch + volume + language + format`，切换音色或语速不会命中旧音频；`audioUrl` 始终是 `/audio-cache/*.mp3` 这类浏览器可访问 URL，不返回服务器文件路径。
 
 - `POST /api/tts/cache/clear`：清空本地音频缓存。
+
+#### 音频缓存静态资源与 nginx
+
+后端将 `AUDIO_CACHE_DIR` 暴露为 `GET /audio-cache/**`。本地 Vite 开发时请设置 `frontend/.env.development`：
+
+```env
+VITE_API_BASE_URL=http://localhost:8080
+```
+
+生产如果 nginx 已经同域代理 `/api` 和 `/audio-cache`，`VITE_API_BASE_URL` 可以留空；如果前后端不同域，请设置为后端域名。nginx 同域部署时需要代理音频缓存：
+
+```nginx
+location /audio-cache/ {
+    proxy_pass http://127.0.0.1:8080/audio-cache/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Docker compose 中如果后端服务名为 `backend`，可使用 `proxy_pass http://backend:8080/audio-cache/;`。浏览器访问 `/audio-cache/*.mp3` 应返回 `200` 与 `Content-Type: audio/mpeg`。
+
 
 ### 跟读评分与发音纠错
 
@@ -116,6 +142,20 @@ AUDIO_CACHE_TTL_DAYS=365
   - `multipart/form-data`: `file`, `referenceText`, `sentenceId`, `bookId`, `pageId`
   - 返回四维评分、word-level 结果与 `evaluationId`。
 - `GET /api/speech/evaluations/{id}`：读取已保存评分。
+
+讯飞配置示例：
+
+```env
+SPEECH_EVAL_PROVIDER=iflytek
+ENABLE_AI_MOCK=false
+IFLYTEK_APP_ID=your_app_id
+IFLYTEK_API_KEY=your_api_key
+IFLYTEK_API_SECRET=your_api_secret
+IFLYTEK_EVAL_ENDPOINT=wss://...
+```
+
+当 `IFLYTEK_EVAL_ENDPOINT` 以 `wss://` 或 `ws://` 开头时，后端使用 WebSocket 客户端生成 `host/date/request-line` HMAC-SHA256 鉴权 URL，并发送 `common/business/data` 帧；不会用普通 HTTP Client 直接请求 `wss://` 地址。日志不会打印 API Secret。
+
 
 ### 短语音反馈
 
@@ -154,7 +194,7 @@ AUDIO_CACHE_TTL_DAYS=365
 - 缺少 `DASHSCOPE_API_KEY`：返回 “DashScope API Key 未配置”。
 - 缺少 OCR Key：返回 “OCR 服务暂未配置，请先配置 API Key”。
 - 缺少语音评测账号：返回 “语音评测服务未配置”。
-- TTS 失败：前端提示 “朗读音频生成失败，请稍后重试”。
+- TTS 生成失败：前端提示 “朗读音频生成失败，请稍后重试”；音频资源加载失败时提示 “朗读音频加载失败，请检查音频地址、格式或后端静态资源配置”，并在浏览器控制台输出 `[TTS result]`、raw/resolved audioUrl 与 media error 详情。
 - 语音评分失败：前端提示 “评分失败，请重新录音”。
 - 所有后端错误响应包含 `requestId`，日志包含 `requestId`，不会打印 API Key。
 

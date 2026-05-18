@@ -1,7 +1,22 @@
 import type { ReadingAssessmentResult } from './analysis/pronunciationDiff';
 import type { Book, BookListItem, StoryResponse } from './story';
 
-const API_BASE_URL = '/api';
+const BACKEND_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE_URL = `${BACKEND_BASE_URL}/api`;
+
+export function resolveAssetUrl(url: string) {
+  if (!url) return '';
+
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+
+  if (url.startsWith('/')) {
+    return `${BACKEND_BASE_URL}${url}`;
+  }
+
+  return `${BACKEND_BASE_URL}/${url}`;
+}
 
 export interface TutorLog {
   role: string;
@@ -140,6 +155,11 @@ export type TtsResult = {
   provider: string;
   model: string;
   voice: string;
+  language: string;
+  speed: number;
+  pitch: number;
+  volume: number;
+  format: string;
 };
 
 export async function getTtsVoices(): Promise<TtsVoice[]> {
@@ -150,7 +170,7 @@ export async function getTtsVoices(): Promise<TtsVoice[]> {
 
 export async function synthesizeTts(input: {
   text: string;
-  language: 'en' | 'zh';
+  language: 'English' | 'Chinese' | 'en' | 'zh';
   voice: string;
   speed?: number;
   pitch?: number;

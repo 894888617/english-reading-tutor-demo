@@ -5,6 +5,7 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 @Configuration
 public class StaticResourceConfig implements WebMvcConfigurer {
@@ -21,6 +22,6 @@ public class StaticResourceConfig implements WebMvcConfigurer {
         registry.addResourceHandler("/covers/**")
                 .addResourceLocations(Path.of("data", "covers").toUri().toString());
         registry.addResourceHandler("/audio-cache/**")
-                .addResourceLocations(Path.of(ttsProperties.getCacheDir()).toUri().toString());
+                .addResourceLocations(Paths.get(ttsProperties.getCacheDir()).toAbsolutePath().normalize().toUri().toString());
     }
 }
