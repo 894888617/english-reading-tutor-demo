@@ -714,8 +714,9 @@ function App() {
       }
     } catch (error) {
       setRecordingStatus('failed');
-      setErrorMessage(`评分失败，请重新录音。${String(error)}`);
-      appendLog('error', `评分失败：${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorMessage(`评分失败：${message}`);
+      appendLog('error', `评分失败：${message}`);
     }
   }
 

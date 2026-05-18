@@ -145,10 +145,82 @@ export async function assessReading(input: {
     form.append('recognizedText', input.recognizedText);
   }
   const response = await fetch(`${API_BASE_URL}/speech/evaluate`, { method: 'POST', body: form });
-  if (!response.ok) {
-    throw new Error(await parseError(response));
+  const text = await response.text();
+  console.info('[speech/evaluate] status=%s response=%s', response.status, text);
+  if (!text) {
+    throw new Error('评分接口返回空响应');
   }
-  return response.json();
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`评分接口返回格式异常：${String(error)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(apiMessage(payload) || `${response.status} ${response.statusText}`);
+  }
+
+  if (isApiEnvelope(payload)) {
+    if (!payload.success) {
+      throw new Error(apiMessage(payload) || '评分失败，请重新录音');
+    }
+    return normalizeAssessmentResult(payload.data);
+  }
+
+  return normalizeAssessmentResult(payload);
+}
+
+function isApiEnvelope(payload: unknown): payload is { success: boolean; data?: unknown; message?: string } {
+  return typeof payload === 'object' && payload !== null && 'success' in payload;
+}
+
+function apiMessage(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return '';
+  const record = payload as Record<string, unknown>;
+  return typeof record.message === 'string' ? record.message : typeof record.error === 'string' ? record.error : '';
+}
+
+function normalizeAssessmentResult(payload: unknown): ReadingAssessmentResult {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error('评分接口返回格式异常');
+  }
+  const data = payload as Record<string, unknown>;
+  if (typeof data.score === 'object' && data.score !== null && Array.isArray(data.wordResults)) {
+    return data as ReadingAssessmentResult;
+  }
+  const score = {
+    totalScore: numberValue(data.totalScore),
+    accuracyScore: numberValue(data.accuracyScore),
+    fluencyScore: numberValue(data.fluencyScore),
+    completenessScore: numberValue(data.completenessScore),
+    clarityScore: numberValue(data.clarityScore),
+  };
+  return {
+    evaluationId: stringValue(data.evaluationId),
+    targetText: stringValue(data.targetText),
+    recognizedText: stringValue(data.recognizedText),
+    score,
+    wordResults: Array.isArray(data.wordResults)
+      ? data.wordResults as ReadingAssessmentResult['wordResults']
+      : Array.isArray(data.words)
+        ? data.words as ReadingAssessmentResult['wordResults']
+        : [],
+    issues: Array.isArray(data.issues) ? data.issues as ReadingAssessmentResult['issues'] : [],
+    feedbackText: stringValue(data.feedbackText),
+    feedbackAudioUrl: stringValue(data.feedbackAudioUrl),
+    recordingUrl: stringValue(data.recordingUrl),
+    pcmGenerated: typeof data.pcmGenerated === 'boolean' ? data.pcmGenerated : undefined,
+  };
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 export type TtsVoice = {

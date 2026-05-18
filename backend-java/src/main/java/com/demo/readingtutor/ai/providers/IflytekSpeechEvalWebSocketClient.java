@@ -54,6 +54,7 @@ public class IflytekSpeechEvalWebSocketClient {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Throwable> failure = new AtomicReference<>();
         List<String> messages = new ArrayList<>();
+        AtomicReference<String> finalResultMessage = new AtomicReference<>();
         StringBuilder partial = new StringBuilder();
 
         WebSocket.Listener listener = new WebSocket.Listener() {
@@ -80,8 +81,16 @@ public class IflytekSpeechEvalWebSocketClient {
                             }
                             failure.set(new ResponseStatusException(mapIflytekStatus(code), mapIflytekMessage(code, responseMessage)));
                             done.countDown();
-                        } else if (node.path("data").path("status").asInt(-1) == 2 || node.path("status").asInt(-1) == 2) {
-                            done.countDown();
+                        } else {
+                            String finalPayload = node.path("data").path("data").asText("");
+                            int status = node.path("data").path("status").asInt(node.path("status").asInt(-1));
+                            if (StringUtils.hasText(finalPayload)) {
+                                finalResultMessage.set(message);
+                                done.countDown();
+                            } else if (status == 2) {
+                                failure.set(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测未返回最终评分结果"));
+                                done.countDown();
+                            }
                         }
                     } catch (Exception ex) {
                         failure.set(ex);
@@ -110,7 +119,7 @@ public class IflytekSpeechEvalWebSocketClient {
             }
             if (!done.await(90, TimeUnit.SECONDS)) {
                 webSocket.abort();
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测服务连接失败");
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测超时：未收到最终评分结果");
             }
             if (failure.get() != null) {
                 Throwable error = failure.get();
@@ -120,8 +129,11 @@ public class IflytekSpeechEvalWebSocketClient {
                 log.warn("Iflytek speech evaluation websocket failed", error);
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测服务连接失败", error);
             }
+            if (!StringUtils.hasText(finalResultMessage.get())) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测未返回最终评分结果");
+            }
             webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "done");
-            return combineMessages(messages);
+            return combineMessages(messages, finalResultMessage.get());
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (CompletionException ex) {
@@ -267,14 +279,14 @@ public class IflytekSpeechEvalWebSocketClient {
         }
     }
 
-    private JsonNode combineMessages(List<String> messages) throws Exception {
+    private JsonNode combineMessages(List<String> messages, String finalMessage) throws Exception {
         List<JsonNode> nodes = new ArrayList<>();
         for (String message : messages) {
             nodes.add(objectMapper.readTree(message));
         }
         Map<String, Object> raw = new LinkedHashMap<>();
         raw.put("messages", nodes);
-        raw.put("final", nodes.isEmpty() ? Map.of() : nodes.get(nodes.size() - 1));
+        raw.put("final", StringUtils.hasText(finalMessage) ? objectMapper.readTree(finalMessage) : Map.of());
         return objectMapper.valueToTree(raw);
     }
 
