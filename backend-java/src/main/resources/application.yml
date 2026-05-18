@@ -1,5 +1,6 @@
 server:
   port: 8080
+  forward-headers-strategy: ${SERVER_FORWARD_HEADERS_STRATEGY:framework}
 
 ai:
   mock-enabled: ${ENABLE_AI_MOCK:false}

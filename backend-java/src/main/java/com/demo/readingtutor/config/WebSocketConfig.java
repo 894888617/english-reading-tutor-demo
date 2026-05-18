@@ -18,6 +18,11 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(realtimeWebSocketHandler, "/ws/realtime")
-                .setAllowedOrigins("http://localhost:5173", "http://127.0.0.1:5173");
+                .setAllowedOriginPatterns(
+                        "https://aienglish.wmhkl.com",
+                        "http://aienglish.wmhkl.com",
+                        "http://localhost:*",
+                        "http://127.0.0.1:*"
+                );
     }
 }
