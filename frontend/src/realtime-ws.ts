@@ -56,11 +56,12 @@ export class RealtimeWsClient {
   async connect(options: RealtimeWsOptions): Promise<void> {
     this.options = options;
     this.emitConnectionStatus('connecting');
-    const WS_URL =
+    const defaultWsUrl =
       window.location.protocol === "https:"
         ? `wss://${window.location.host}/ws/realtime`
         : `ws://${window.location.host}/ws/realtime`;
-    const url = options.url ?? WS_URL;
+    // const url = options.url ?? WS_URL;
+    const url = options.url || import.meta.env.VITE_REALTIME_WS_URL || defaultWsUrl;
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
