@@ -3,15 +3,15 @@ package com.demo.readingtutor.assessment.service;
 import com.demo.readingtutor.assessment.dto.PronunciationIssue;
 import com.demo.readingtutor.assessment.dto.ReadingAssessmentResult;
 import com.demo.readingtutor.assessment.dto.ReadingScore;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
 @Service
-@Primary
+@ConditionalOnExpression("${ai.mock-enabled:false}")
 public class MockSpeechAssessmentService implements SpeechAssessmentService {
     private final PronunciationDiffService diffService;
 
@@ -41,7 +41,7 @@ public class MockSpeechAssessmentService implements SpeechAssessmentService {
         int clarity = clamp(issueCount == 0 ? 92 : 88 - (int) wrong * 7);
         int total = (int) Math.round(accuracy * 0.35 + fluency * 0.25 + completeness * 0.25 + clarity * 0.15);
         ReadingScore score = new ReadingScore(total, accuracy, fluency, completeness, clarity);
-        return new ReadingAssessmentResult(safeTarget, safeRecognized, score, diff.wordResults(), diff.issues(), feedback(score, diff.issues()));
+        return new ReadingAssessmentResult(null, safeTarget, safeRecognized, score, diff.wordResults(), diff.issues(), feedback(score, diff.issues()), null);
     }
 
     private String mockRecognizedText(String targetText) {

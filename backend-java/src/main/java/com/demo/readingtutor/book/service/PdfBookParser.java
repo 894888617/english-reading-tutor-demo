@@ -4,13 +4,17 @@ import com.demo.readingtutor.book.config.UploadProperties;
 import com.demo.readingtutor.book.model.BookPage;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
+import javax.imageio.ImageIO;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -20,10 +24,12 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 public class PdfBookParser {
     private final UploadProperties uploadProperties;
     private final BookTextSplitter textSplitter;
+    private final OcrService ocrService;
 
-    public PdfBookParser(UploadProperties uploadProperties, BookTextSplitter textSplitter) {
+    public PdfBookParser(UploadProperties uploadProperties, BookTextSplitter textSplitter, OcrService ocrService) {
         this.uploadProperties = uploadProperties;
         this.textSplitter = textSplitter;
+        this.ocrService = ocrService;
     }
 
     public List<BookPage> parse(File pdfFile) {
@@ -34,28 +40,31 @@ public class PdfBookParser {
             }
 
             PDFTextStripper stripper = new PDFTextStripper();
+            PDFRenderer renderer = new PDFRenderer(document);
             List<BookPage> pages = new ArrayList<>();
             for (int i = 1; i <= pageCount; i++) {
                 try {
                     stripper.setStartPage(i);
                     stripper.setEndPage(i);
                     String text = normalize(stripper.getText(document));
-                    boolean needOcr = !StringUtils.hasText(text);
-                    pages.add(new BookPage(
-                            i,
-                            null,
-                            needOcr ? "" : text,
-                            needOcr,
-                            needOcr ? "解析失败：没有识别到英文文本，请手动输入本页内容。" : null,
-                            needOcr ? List.of() : textSplitter.split(text)
-                    ));
+                    String parseError = null;
+                    if (!StringUtils.hasText(text)) {
+                        File image = Files.createTempFile("pdf-page-" + i + "-", ".png").toFile();
+                        try {
+                            ImageIO.write(renderer.renderImageWithDPI(i - 1, 180, ImageType.RGB), "png", image);
+                            text = normalize(ocrService.recognizeText(image));
+                        } finally {
+                            Files.deleteIfExists(image.toPath());
+                        }
+                    }
+                    pages.add(new BookPage(i, null, text, false, parseError, textSplitter.split(text)));
                 } catch (Exception pageError) {
                     pages.add(new BookPage(
                             i,
                             null,
                             "",
                             true,
-                            "第 " + i + " 页解析失败：" + pageError.getMessage() + "。请手动补录文本。",
+                            "第 " + i + " 页 OCR/解析失败：" + pageError.getMessage() + "。请重试 OCR 或手动补录文本。",
                             List.of()
                     ));
                 }

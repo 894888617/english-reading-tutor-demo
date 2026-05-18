@@ -10,6 +10,8 @@ services:
       - ./data/uploads:/app/data/uploads
       - ./data/books:/app/data/books
       - ./data/covers:/app/data/covers
+      - ./data/evaluations:/app/data/evaluations
+      - ./storage/audio-cache:/app/storage/audio-cache
       - ./logs:/app/logs
 
   frontend:

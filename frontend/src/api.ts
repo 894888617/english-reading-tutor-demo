@@ -109,17 +109,72 @@ export async function assessReading(input: {
 }): Promise<ReadingAssessmentResult> {
   const form = new FormData();
   const extension = input.audio.type.includes('wav') ? 'wav' : 'webm';
-  form.append('audio', input.audio, `reading.${extension}`);
-  form.append('targetText', input.targetText);
+  form.append('file', input.audio, `reading.${extension}`);
+  form.append('referenceText', input.targetText);
   form.append('bookId', input.bookId ?? '');
-  form.append('pageNo', String(input.pageNo ?? 1));
-  form.append('sentenceIndex', String(input.sentenceIndex ?? 0));
+  form.append('pageId', String(input.pageNo ?? 1));
+  form.append('sentenceId', String(input.sentenceIndex ?? 0));
   if (input.recognizedText) {
     form.append('recognizedText', input.recognizedText);
   }
-  const response = await fetch(`${API_BASE_URL}/assessment/reading`, { method: 'POST', body: form });
+  const response = await fetch(`${API_BASE_URL}/speech/evaluate`, { method: 'POST', body: form });
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
+  return response.json();
+}
+
+export type TtsVoice = {
+  id: string;
+  name: string;
+  model: string;
+  language: string;
+  gender: string;
+  description: string;
+};
+
+export type TtsResult = {
+  audioUrl: string;
+  cacheHit: boolean;
+  durationMs?: number;
+  provider: string;
+  model: string;
+  voice: string;
+};
+
+export async function getTtsVoices(): Promise<TtsVoice[]> {
+  const response = await fetch(`${API_BASE_URL}/tts/voices`);
+  if (!response.ok) throw new Error(`声音列表加载失败：${await parseError(response)}`);
+  return response.json();
+}
+
+export async function synthesizeTts(input: {
+  text: string;
+  language: 'en' | 'zh';
+  voice: string;
+  speed?: number;
+  pitch?: number;
+  volume?: number;
+  format?: 'mp3' | 'wav' | 'pcm';
+  bookId?: string;
+  pageId?: string;
+  sentenceId?: string;
+}): Promise<TtsResult> {
+  const response = await fetch(`${API_BASE_URL}/tts/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}
+
+export async function createSpeechFeedback(input: { evaluationId: string; voice: string }): Promise<{ text: string; audioUrl: string }> {
+  const response = await fetch(`${API_BASE_URL}/feedback/speech`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }

@@ -8,11 +8,19 @@ import java.nio.file.Path;
 
 @Configuration
 public class StaticResourceConfig implements WebMvcConfigurer {
+    private final TtsProperties ttsProperties;
+
+    public StaticResourceConfig(TtsProperties ttsProperties) {
+        this.ttsProperties = ttsProperties;
+    }
+
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         registry.addResourceHandler("/uploads/**")
                 .addResourceLocations(Path.of("data", "uploads").toUri().toString());
         registry.addResourceHandler("/covers/**")
                 .addResourceLocations(Path.of("data", "covers").toUri().toString());
+        registry.addResourceHandler("/audio-cache/**")
+                .addResourceLocations(Path.of(ttsProperties.getCacheDir()).toUri().toString());
     }
 }

@@ -1,6 +1,6 @@
 export type ReadMode = 'page' | 'sentence' | 'repeat' | 'slow' | 'word';
 export type RecordingStatus = 'idle' | 'recording' | 'uploading' | 'scoring' | 'done' | 'failed';
-export type VoiceStyle = 'professional_female' | 'professional_male' | 'child_friendly_female' | 'child_friendly_male';
+export type VoiceStyle = string;
 
 export type WordToken = {
   index: number;
@@ -34,6 +34,8 @@ export type ReadingAssessmentResult = {
   wordResults: WordToken[];
   issues: PronunciationIssue[];
   feedbackText: string;
+  evaluationId?: string;
+  feedbackAudioUrl?: string;
 };
 
 export function tokenizeSentence(text: string): WordToken[] {

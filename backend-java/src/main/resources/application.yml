@@ -1,13 +1,25 @@
 server:
   port: 8080
 
+ai:
+  mock-enabled: ${ENABLE_AI_MOCK:false}
+  dashscope-api-key: ${DASHSCOPE_API_KEY:}
+  dashscope-region: ${DASHSCOPE_REGION:beijing}
+  dashscope-base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
+
 aliyun:
   dashscope:
     api-key: ${DASHSCOPE_API_KEY:}
     realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
-    realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
-    default-voice: ${REALTIME_VOICE:Jennifer}
-
+    realtime-model: ${REALTIME_TUTOR_MODEL:qwen3.5-omni-plus-realtime}
+    default-voice: ${REALTIME_TUTOR_VOICE:Jennifer}
+    protocol: ${REALTIME_TUTOR_PROTOCOL:webrtc}
+    vad-enabled: ${REALTIME_TUTOR_VAD_ENABLED:true}
+    interrupt-enabled: ${REALTIME_TUTOR_INTERRUPT_ENABLED:true}
+    live-translate-model: ${LIVE_TRANSLATE_MODEL:qwen3-livetranslate-flash-realtime}
+    live-translate-source-language: ${LIVE_TRANSLATE_SOURCE_LANGUAGE:en}
+    live-translate-target-language: ${LIVE_TRANSLATE_TARGET_LANGUAGE:zh}
+    live-translate-voice: ${LIVE_TRANSLATE_VOICE:Cherry}
 
 spring:
   servlet:
@@ -21,25 +33,35 @@ app:
     max-pdf-pages: 30
 
 ocr:
-  provider: ${OCR_PROVIDER:mock}
+  provider: ${OCR_PROVIDER:dashscope}
+  model: ${OCR_MODEL:qwen-vl-ocr-2025-11-20}
   baidu:
-    api-key: 
-    secret-key: 
+    api-key: ${BAIDU_OCR_API_KEY:}
+    secret-key: ${BAIDU_OCR_SECRET_KEY:}
   tencent:
-    secret-id: 
-    secret-key: 
+    secret-id: ${TENCENT_OCR_SECRET_ID:}
+    secret-key: ${TENCENT_OCR_SECRET_KEY:}
 
 assessment:
-  provider: ${ASSESSMENT_PROVIDER:mock}
-  mock-enabled: true
+  provider: ${SPEECH_EVAL_PROVIDER:iflytek}
+  mock-enabled: ${ENABLE_AI_MOCK:false}
   max-audio-duration-seconds: 30
   max-audio-size-mb: 10
   vendor:
-    app-id: ${ASSESSMENT_APP_ID:}
-    api-key: ${ASSESSMENT_API_KEY:}
-    api-secret: ${ASSESSMENT_API_SECRET:}
+    app-id: ${IFLYTEK_APP_ID:}
+    api-key: ${IFLYTEK_API_KEY:}
+    api-secret: ${IFLYTEK_API_SECRET:}
+    endpoint: ${IFLYTEK_EVAL_ENDPOINT:}
 
 tts:
-  voice-style: ${REALTIME_VOICE_STYLE:professional_female}
-  speed-normal: 1.0
-  speed-slow: 0.75
+  provider: ${TTS_PROVIDER:dashscope}
+  model: ${TTS_MODEL:qwen3-tts-flash}
+  default-voice: ${TTS_VOICE:Cherry}
+  language: ${TTS_LANGUAGE:English}
+  format: ${TTS_FORMAT:mp3}
+  speed: ${TTS_SPEED:0.9}
+  pitch: ${TTS_PITCH:1.0}
+  volume: ${TTS_VOLUME:1.0}
+  cache-driver: ${AUDIO_CACHE_DRIVER:local}
+  cache-dir: ${AUDIO_CACHE_DIR:./storage/audio-cache}
+  cache-ttl-days: ${AUDIO_CACHE_TTL_DAYS:365}
