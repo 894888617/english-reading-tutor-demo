@@ -20,6 +20,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -46,9 +48,12 @@ public class DashScopeTtsProvider implements TtsProvider {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "朗读文本不能为空。");
         }
         String model = tts.getModel();
+        if (!StringUtils.hasText(model) || !StringUtils.hasText(tts.getDefaultVoice())) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "TTS 服务未配置");
+        }
         String voice = StringUtils.hasText(input.voice()) ? input.voice() : tts.getDefaultVoice();
         tts.requireVoice(voice, model);
-        String language = "zh".equalsIgnoreCase(input.language()) ? "Chinese" : "English";
+        String language = normalizeLanguage(input.language());
         String format = StringUtils.hasText(input.format()) ? input.format() : tts.getFormat();
         double speed = input.speed() == null ? tts.getSpeed() : input.speed();
         double pitch = input.pitch() == null ? tts.getPitch() : input.pitch();
@@ -56,9 +61,10 @@ public class DashScopeTtsProvider implements TtsProvider {
         var key = cache.buildKey(model, voice, language, speed, pitch, volume, format, text);
         var cached = cache.find(key);
         if (cached.isPresent()) {
-            return new TtsResult(cached.get(), true, null, "dashscope", model, voice);
+            return new TtsResult(cached.get(), true, null, "dashscope", model, voice, language, speed, pitch, volume, format);
         }
         log.info("TTS synthesize request model={} voice={} language={} speed={} pitch={} volume={}", model, voice, language, speed, pitch, volume);
+        long startedAt = Instant.now().toEpochMilli();
         try {
             String body = objectMapper.writeValueAsString(Map.of(
                     "model", model,
@@ -90,12 +96,18 @@ public class DashScopeTtsProvider implements TtsProvider {
                 bytes = java.util.Base64.getDecoder().decode(data);
             } else if (StringUtils.hasText(audioUrl)) {
                 HttpRequest download = HttpRequest.newBuilder(URI.create(audioUrl)).timeout(Duration.ofSeconds(90)).GET().build();
-                bytes = httpClient.send(download, HttpResponse.BodyHandlers.ofByteArray()).body();
+                HttpResponse<byte[]> downloadResponse = httpClient.send(download, HttpResponse.BodyHandlers.ofByteArray());
+                if (downloadResponse.statusCode() / 100 != 2) {
+                    throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频下载失败，请稍后重试");
+                }
+                bytes = downloadResponse.body();
             } else {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败，请稍后重试");
             }
+            validateAudioBytes(bytes, format);
             String localUrl = cache.put(key, bytes);
-            return new TtsResult(localUrl, false, null, "dashscope", model, voice);
+            long durationMs = Math.max(0, Instant.now().toEpochMilli() - startedAt);
+            return new TtsResult(localUrl, false, durationMs, "dashscope", model, voice, language, speed, pitch, volume, format);
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -103,4 +115,36 @@ public class DashScopeTtsProvider implements TtsProvider {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败，请稍后重试", ex);
         }
     }
+    private String normalizeLanguage(String language) {
+        if (!StringUtils.hasText(language)) {
+            return tts.getLanguage();
+        }
+        String value = language.trim();
+        if ("zh".equalsIgnoreCase(value) || "chinese".equalsIgnoreCase(value)) {
+            return "Chinese";
+        }
+        if ("en".equalsIgnoreCase(value) || "english".equalsIgnoreCase(value)) {
+            return "English";
+        }
+        return value;
+    }
+
+    private void validateAudioBytes(byte[] bytes, String format) {
+        if (bytes == null || bytes.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败：音频文件为空");
+        }
+        int first = bytes[0] & 0xff;
+        if (first == '{' || first == '[' || first == '<') {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败：服务商返回的不是音频文件");
+        }
+        String normalizedFormat = format == null ? "" : format.toLowerCase(Locale.ROOT);
+        if ("wav".equals(normalizedFormat) && bytes.length > 12) {
+            String riff = new String(bytes, 0, 4, java.nio.charset.StandardCharsets.US_ASCII);
+            String wave = new String(bytes, 8, 4, java.nio.charset.StandardCharsets.US_ASCII);
+            if (!"RIFF".equals(riff) || !"WAVE".equals(wave)) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "朗读音频生成失败：WAV 文件格式无效");
+            }
+        }
+    }
+
 }

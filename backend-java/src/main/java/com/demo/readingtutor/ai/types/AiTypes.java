@@ -29,7 +29,12 @@ public final class AiTypes {
             Long durationMs,
             String provider,
             String model,
-            String voice
+            String voice,
+            String language,
+            double speed,
+            double pitch,
+            double volume,
+            String format
     ) {}
 
     public record TtsVoice(

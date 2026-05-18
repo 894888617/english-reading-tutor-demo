@@ -27,12 +27,15 @@ public class AudioCacheService {
     }
 
     public Optional<String> find(CacheKey key) {
-        return Files.exists(key.path()) ? Optional.of(key.audioUrl()) : Optional.empty();
+        return Files.exists(key.path()) && isNonEmptyFile(key.path()) ? Optional.of(key.audioUrl()) : Optional.empty();
     }
 
     public String put(CacheKey key, byte[] bytes) {
         try {
             ensureDir();
+            if (bytes == null || bytes.length == 0) {
+                throw new IllegalArgumentException("音频缓存内容不能为空。");
+            }
             Files.write(key.path(), bytes);
             return key.audioUrl();
         } catch (IOException ex) {
@@ -57,7 +60,11 @@ public class AudioCacheService {
         try { Files.createDirectories(path()); } catch (IOException ex) { throw new IllegalStateException("初始化音频缓存目录失败。", ex); }
     }
 
-    private Path path() { return Path.of(properties.getCacheDir()); }
+    private boolean isNonEmptyFile(Path path) {
+        try { return Files.size(path) > 0; } catch (IOException ex) { return false; }
+    }
+
+    private Path path() { return Path.of(properties.getCacheDir()).toAbsolutePath().normalize(); }
     private String normalize(double value) { return String.format(java.util.Locale.ROOT, "%.2f", value); }
 
     public record CacheKey(String rawKey, String textHash, Path path, String audioUrl) {}

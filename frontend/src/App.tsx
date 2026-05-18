@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { assessReading, createSpeechFeedback, deleteBook, getBook, getTtsVoices, listBooks, saveLog, synthesizeTts, updateBook, uploadBook, type TtsVoice } from './api';
+import { assessReading, createSpeechFeedback, deleteBook, getBook, getTtsVoices, listBooks, resolveAssetUrl, saveLog, synthesizeTts, updateBook, uploadBook, type TtsVoice } from './api';
 import { RealtimeWsClient, type ConnectionStatus, type MicStatus, type RealtimeDebugEvent } from './realtime-ws';
 import { tokenizeSentence, wordMeaning, type ReadingAssessmentResult, type ReadMode, type RecordingStatus, type VoiceStyle, type WordToken } from './analysis/pronunciationDiff';
 import { Recorder, type RecorderResult } from './recording/Recorder';
@@ -103,10 +103,10 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>('Cherry');
   const [ttsVoices, setTtsVoices] = useState<TtsVoice[]>([]);
-  const [ttsSpeed, setTtsSpeed] = useState(0.9);
+  const [ttsSpeed, setTtsSpeed] = useState(1.0);
   const [ttsPitch, setTtsPitch] = useState(1.0);
   const [ttsVolume, setTtsVolume] = useState(1.0);
-  const [ttsLanguage, setTtsLanguage] = useState<'en' | 'zh'>('en');
+  const [ttsLanguage, setTtsLanguage] = useState<'English' | 'Chinese'>('English');
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [currentTtsMeta, setCurrentTtsMeta] = useState('未生成朗读音频');
   const [isAiPlaying, setIsAiPlaying] = useState(false);
@@ -424,13 +424,29 @@ function App() {
         format: 'mp3',
       });
       audioRef.current?.pause();
-      const audio = new Audio(`${result.audioUrl}?v=${encodeURIComponent(`${result.model}-${result.voice}-${effectiveSpeed}-${ttsPitch}-${ttsVolume}`)}`);
+      console.log('[TTS result]', result);
+      console.log('[TTS audioUrl raw]', result.audioUrl);
+      const rawAudioUrl = resolveAssetUrl(result.audioUrl);
+      const audioUrl = `${rawAudioUrl}?v=${encodeURIComponent(
+        `${result.model}-${result.voice}-${result.speed || effectiveSpeed}-${result.pitch}-${result.volume}`
+      )}`;
+      console.log('[TTS audioUrl resolved]', audioUrl);
+      const audio = new Audio(audioUrl);
       audio.playbackRate = playbackRate;
       audioRef.current = audio;
-      setCurrentTtsMeta(`${result.model} / ${result.voice} / ${effectiveSpeed}x / ${result.cacheHit ? '缓存命中' : '新生成'}`);
+      setCurrentTtsMeta(`${result.provider} / ${result.model} / ${result.voice} / ${result.language} / 生成语速 ${result.speed}x / pitch ${result.pitch} / volume ${result.volume} / ${result.format} / ${result.cacheHit ? '缓存命中' : '新生成'}`);
       setReadMode(mode);
       audio.onended = () => setIsAiPlaying(false);
-      audio.onerror = () => { setIsAiPlaying(false); setErrorMessage('朗读音频生成失败，请稍后重试'); };
+      audio.onerror = () => {
+        console.error('[TTS audio error]', {
+          src: audio.src,
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          error: audio.error
+        });
+        setIsAiPlaying(false);
+        setErrorMessage('朗读音频加载失败，请检查音频地址、格式或后端静态资源配置');
+      };
       await audio.play();
     } catch (error) {
       setIsAiPlaying(false);
@@ -637,7 +653,7 @@ function App() {
       try {
         if (result.evaluationId) {
           const feedback = await createSpeechFeedback({ evaluationId: result.evaluationId, voice: voiceStyle });
-          const audio = new Audio(feedback.audioUrl);
+          const audio = new Audio(resolveAssetUrl(feedback.audioUrl));
           audio.playbackRate = playbackRate;
           await audio.play();
         }
@@ -784,7 +800,7 @@ function App() {
           </div>
 
           <div className="learning-section">
-            <div className="section-title-row"><h3>朗读控制区</h3><span>当前模式：{readMode ?? '未播放'}</span></div>
+            <div className="section-title-row"><h3>朗读控制区</h3><span>播放模式：{readMode ?? '未播放'}（生成语速与播放倍速独立）</span></div>
             <div className="tts-control-grid">
               <label className="voice-select">外教声音
                 <select value={voiceStyle} onChange={(event) => handleVoiceStyleChange(event.target.value as VoiceStyle)}>
@@ -792,9 +808,9 @@ function App() {
                 </select>
               </label>
               <label>语言
-                <select value={ttsLanguage} onChange={(event) => setTtsLanguage(event.target.value as 'en' | 'zh')}>
-                  <option value="en">English</option>
-                  <option value="zh">Chinese</option>
+                <select value={ttsLanguage} onChange={(event) => setTtsLanguage(event.target.value as 'English' | 'Chinese')}>
+                  <option value="English">English</option>
+                  <option value="Chinese">Chinese</option>
                 </select>
               </label>
               <label>生成语速<input type="number" min="0.5" max="1.5" step="0.05" value={ttsSpeed} onChange={(event) => setTtsSpeed(Number(event.target.value))} /></label>
@@ -802,7 +818,7 @@ function App() {
               <label>Volume<input type="number" min="0.1" max="2" step="0.05" value={ttsVolume} onChange={(event) => setTtsVolume(Number(event.target.value))} /></label>
               <label>播放倍速<input type="number" min="0.5" max="1.5" step="0.05" value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} /></label>
             </div>
-            <p className="help-text">当前音色：{selectedVoice ? `${selectedVoice.name}（${selectedVoice.id} / ${selectedVoice.model}）` : voiceStyle}；{currentTtsMeta}</p>
+            <p className="help-text">选择音色：{selectedVoice ? `${selectedVoice.name}（${selectedVoice.id} / ${selectedVoice.model}）` : voiceStyle}；当前实际返回：{currentTtsMeta}</p>
             <div className="button-row">
               <button type="button" onClick={handleReadPage} disabled={!currentPage?.sentences.length || isAiPlaying || isRecordingOrScoring}>整页朗读</button>
               <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>逐句播放</button>
