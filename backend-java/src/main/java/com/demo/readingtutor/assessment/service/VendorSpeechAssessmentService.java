@@ -36,7 +36,7 @@ public class VendorSpeechAssessmentService implements SpeechAssessmentService {
     @Override
     public ReadingAssessmentResult assess(MultipartFile audio, String targetText, String recognizedText) {
         try {
-            SpeechEvalResult eval = provider.evaluate(audio.getBytes(), targetText, "en", null, null);
+            SpeechEvalResult eval = provider.evaluate(audio.getBytes(), targetText, "en", null, null, audio.getContentType(), audio.getOriginalFilename());
             ReadingScore score = new ReadingScore(eval.totalScore(), eval.accuracyScore(), eval.fluencyScore(), eval.completenessScore(), eval.clarityScore());
             List<WordToken> tokens = new ArrayList<>();
             List<PronunciationIssue> issues = new ArrayList<>();

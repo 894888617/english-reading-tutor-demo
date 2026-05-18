@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class IflytekSpeechEvalWebSocketClient {
     private static final Logger log = LoggerFactory.getLogger(IflytekSpeechEvalWebSocketClient.class);
     private static final DateTimeFormatter RFC_1123 = DateTimeFormatter.RFC_1123_DATE_TIME;
+    private static final int AUDIO_CHUNK_SIZE_BYTES = 1280;
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build();
@@ -45,6 +46,10 @@ public class IflytekSpeechEvalWebSocketClient {
     }
 
     public JsonNode evaluate(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, AssessmentProperties.Vendor vendor) {
+        return evaluate(audioFile, referenceText, language, sentenceId, userId, vendor, "raw", "audio/L16;rate=16000");
+    }
+
+    public JsonNode evaluate(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, AssessmentProperties.Vendor vendor, String aue, String auf) {
         URI signedUri = buildSignedUri(vendor.getEndpoint(), vendor.getApiKey(), vendor.getApiSecret());
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -95,12 +100,14 @@ public class IflytekSpeechEvalWebSocketClient {
         };
 
         try {
-            String requestBody = buildRequest(audioFile, referenceText, language, sentenceId, userId, vendor.getAppId(), vendor.getEndpoint());
+            List<String> requestFrames = buildRequestFrames(audioFile, referenceText, language, sentenceId, userId, vendor.getAppId(), vendor.getEndpoint(), aue, auf);
             WebSocket webSocket = httpClient.newWebSocketBuilder()
                     .connectTimeout(Duration.ofSeconds(20))
                     .buildAsync(signedUri, listener)
                     .join();
-            webSocket.sendText(requestBody, true).join();
+            for (String requestFrame : requestFrames) {
+                webSocket.sendText(requestFrame, true).join();
+            }
             if (!done.await(90, TimeUnit.SECONDS)) {
                 webSocket.abort();
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测服务连接失败");
@@ -157,23 +164,54 @@ public class IflytekSpeechEvalWebSocketClient {
         }
     }
 
-    private String buildRequest(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId, String endpoint) throws Exception {
+    private List<String> buildRequestFrames(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId, String endpoint, String aue, String auf) throws Exception {
         byte[] audioBytes = audioFile == null ? new byte[0] : audioFile;
         if (audioBytes.length == 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "录音文件为空，请重新录音");
         }
-        String audioBase64 = Base64.getEncoder().encodeToString(audioBytes);
-        if (!StringUtils.hasText(audioBase64)) {
+        int audioBase64Length = Base64.getEncoder().encodeToString(audioBytes).length();
+        if (audioBase64Length == 0) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "录音编码失败");
         }
 
+        Map<String, Object> common = Map.of("app_id", appId);
+        Map<String, Object> parameterBusiness = baseBusiness(referenceText, language, sentenceId, userId, aue, auf);
+        parameterBusiness.put("cmd", "ssb");
+        log.info("Iflytek speech evaluation request endpoint={} referenceText={} audioBytesLength={} audioBase64Length={} business={}",
+                endpoint, referenceText, audioBytes.length, audioBase64Length, parameterBusiness);
+
+        List<String> frames = new ArrayList<>();
+        frames.add(objectMapper.writeValueAsString(Map.of(
+                "common", common,
+                "business", parameterBusiness,
+                "data", Map.of("status", 0)
+        )));
+
+        List<byte[]> chunks = splitAudio(audioBytes);
+        for (int i = 0; i < chunks.size(); i++) {
+            boolean first = i == 0;
+            boolean last = i == chunks.size() - 1;
+            Map<String, Object> audioBusiness = new LinkedHashMap<>();
+            audioBusiness.put("cmd", "auw");
+            audioBusiness.put("aus", first ? 1 : last ? 4 : 2);
+            frames.add(objectMapper.writeValueAsString(Map.of(
+                    "business", audioBusiness,
+                    "data", Map.of(
+                            "status", last ? 2 : 1,
+                            "data", Base64.getEncoder().encodeToString(chunks.get(i))
+                    )
+            )));
+        }
+        return frames;
+    }
+
+    private Map<String, Object> baseBusiness(String referenceText, String language, String sentenceId, String userId, String aue, String auf) {
         Map<String, Object> business = new LinkedHashMap<>();
         business.put("category", "read_sentence");
         business.put("sub", "ise");
         business.put("ent", normalizeLanguage(language));
-        business.put("cmd", "ssb");
-        business.put("auf", "audio/L16;rate=16000");
-        business.put("aue", "raw");
+        business.put("auf", StringUtils.hasText(auf) ? auf : "audio/L16;rate=16000");
+        business.put("aue", StringUtils.hasText(aue) ? aue : "raw");
         business.put("text", referenceText == null ? "" : referenceText);
         if (StringUtils.hasText(sentenceId)) {
             business.put("sentence_id", sentenceId);
@@ -181,43 +219,45 @@ public class IflytekSpeechEvalWebSocketClient {
         if (StringUtils.hasText(userId)) {
             business.put("user_id", userId);
         }
-        log.info("Iflytek speech evaluation request endpoint={} referenceText={} audioBytesLength={} audioBase64Length={} business={}",
-                endpoint, referenceText, audioBytes.length, audioBase64.length(), business);
-        return objectMapper.writeValueAsString(Map.of(
-                "common", Map.of("app_id", appId),
-                "business", business,
-                "data", Map.of(
-                        "status", 2,
-                        "audio", audioBase64
-                )
-        ));
+        return business;
+    }
+
+    private List<byte[]> splitAudio(byte[] audioBytes) {
+        List<byte[]> chunks = new ArrayList<>();
+        int chunkSize = audioBytes.length > 1 && audioBytes.length <= AUDIO_CHUNK_SIZE_BYTES
+                ? Math.max(1, audioBytes.length / 2)
+                : AUDIO_CHUNK_SIZE_BYTES;
+        for (int offset = 0; offset < audioBytes.length; offset += chunkSize) {
+            int length = Math.min(chunkSize, audioBytes.length - offset);
+            byte[] chunk = new byte[length];
+            System.arraycopy(audioBytes, offset, chunk, 0, length);
+            chunks.add(chunk);
+        }
+        return chunks;
     }
 
     private String safeFieldStructure(byte[] audioFile, String referenceText, String language, String sentenceId, String userId, String appId) {
-        Map<String, Object> business = new LinkedHashMap<>();
-        business.put("category", "read_sentence");
-        business.put("sub", "ise");
-        business.put("ent", normalizeLanguage(language));
-        business.put("cmd", "ssb");
-        business.put("auf", "audio/L16;rate=16000");
-        business.put("aue", "raw");
-        business.put("text", referenceText == null ? "" : referenceText);
-        if (StringUtils.hasText(sentenceId)) {
-            business.put("sentence_id", sentenceId);
-        }
-        if (StringUtils.hasText(userId)) {
-            business.put("user_id", userId);
-        }
         int audioBytesLength = audioFile == null ? 0 : audioFile.length;
         int audioBase64Length = audioBytesLength == 0 ? 0 : Base64.getEncoder().encodeToString(audioFile).length();
-        Map<String, Object> safeData = new LinkedHashMap<>();
-        safeData.put("status", 2);
-        safeData.put("audio", Map.of("base64Length", audioBase64Length));
-        safeData.put("audioBytesLength", audioBytesLength);
+        Map<String, Object> parameterBusiness = baseBusiness(referenceText, language, sentenceId, userId, "raw", "audio/L16;rate=16000");
+        parameterBusiness.put("cmd", "ssb");
+        Map<String, Object> firstAudioBusiness = new LinkedHashMap<>();
+        firstAudioBusiness.put("cmd", "auw");
+        firstAudioBusiness.put("aus", 1);
+        Map<String, Object> safeAudioData = new LinkedHashMap<>();
+        safeAudioData.put("status", 1);
+        safeAudioData.put("data", Map.of("base64Length", audioBase64Length));
         Map<String, Object> structure = new LinkedHashMap<>();
-        structure.put("common", Map.of("app_id", StringUtils.hasText(appId) ? "configured" : "missing"));
-        structure.put("business", business);
-        structure.put("data", safeData);
+        structure.put("parameterFrame", Map.of(
+                "common", Map.of("app_id", StringUtils.hasText(appId) ? "configured" : "missing"),
+                "business", parameterBusiness,
+                "data", Map.of("status", 0)
+        ));
+        structure.put("audioFrame", Map.of(
+                "business", firstAudioBusiness,
+                "data", safeAudioData,
+                "audioBytesLength", audioBytesLength
+        ));
         try {
             return objectMapper.writeValueAsString(structure);
         } catch (Exception ex) {
