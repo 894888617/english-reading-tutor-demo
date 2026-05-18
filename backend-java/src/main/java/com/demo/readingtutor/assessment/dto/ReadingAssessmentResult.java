@@ -10,5 +10,7 @@ public record ReadingAssessmentResult(
         List<WordToken> wordResults,
         List<PronunciationIssue> issues,
         String feedbackText,
-        String feedbackAudioUrl
+        String feedbackAudioUrl,
+        String recordingUrl,
+        Boolean pcmGenerated
 ) {}

@@ -43,6 +43,10 @@ public class AudioCacheService {
         }
     }
 
+    public long fileSize(CacheKey key) {
+        try { return Files.size(key.path()); } catch (IOException ex) { return 0L; }
+    }
+
     public int clear() {
         try {
             ensureDir();

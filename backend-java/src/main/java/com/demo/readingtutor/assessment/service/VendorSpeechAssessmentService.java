@@ -1,6 +1,7 @@
 package com.demo.readingtutor.assessment.service;
 
 import com.demo.readingtutor.ai.providers.SpeechEvalProvider;
+import com.demo.readingtutor.assessment.audio.AudioTranscodeService;
 import com.demo.readingtutor.ai.types.AiTypes.SpeechEvalResult;
 import com.demo.readingtutor.assessment.dto.PronunciationIssue;
 import com.demo.readingtutor.assessment.dto.ReadingAssessmentResult;
@@ -23,9 +24,10 @@ import static org.springframework.http.HttpStatus.BAD_GATEWAY;
 public class VendorSpeechAssessmentService implements SpeechAssessmentService {
     private final SpeechEvalProvider provider;
     private final EvaluationRecordService recordService;
+    private final AudioTranscodeService audioTranscodeService;
 
-    public VendorSpeechAssessmentService(SpeechEvalProvider provider, EvaluationRecordService recordService) {
-        this.provider = provider; this.recordService = recordService;
+    public VendorSpeechAssessmentService(SpeechEvalProvider provider, EvaluationRecordService recordService, AudioTranscodeService audioTranscodeService) {
+        this.provider = provider; this.recordService = recordService; this.audioTranscodeService = audioTranscodeService;
     }
 
     @Override
@@ -36,7 +38,8 @@ public class VendorSpeechAssessmentService implements SpeechAssessmentService {
     @Override
     public ReadingAssessmentResult assess(MultipartFile audio, String targetText, String recognizedText) {
         try {
-            SpeechEvalResult eval = provider.evaluate(audio.getBytes(), targetText, "en", null, null, audio.getContentType(), audio.getOriginalFilename());
+            byte[] pcmBytes = audioTranscodeService.toPcm16kMono(audio);
+            SpeechEvalResult eval = provider.evaluate(pcmBytes, targetText, "en", null, null, "audio/L16;rate=16000", audio.getOriginalFilename());
             ReadingScore score = new ReadingScore(eval.totalScore(), eval.accuracyScore(), eval.fluencyScore(), eval.completenessScore(), eval.clarityScore());
             List<WordToken> tokens = new ArrayList<>();
             List<PronunciationIssue> issues = new ArrayList<>();
@@ -50,7 +53,7 @@ public class VendorSpeechAssessmentService implements SpeechAssessmentService {
                 }
             }
             String feedback = feedback(score, issues);
-            return recordService.save(new ReadingAssessmentResult(null, targetText, recognizedText == null ? "" : recognizedText, score, tokens, issues, feedback, null));
+            return recordService.save(new ReadingAssessmentResult(null, targetText, recognizedText == null ? "" : recognizedText, score, tokens, issues, feedback, null, null, true));
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {

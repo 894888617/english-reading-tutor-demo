@@ -24,7 +24,7 @@ public class FeedbackController {
         ReadingAssessmentResult eval = recordService.get(body.getOrDefault("evaluationId", ""));
         String text = eval.feedbackText();
         String voice = body.get("voice");
-        var audio = ttsProvider.synthesize(new TtsRequest(text, "en", voice, 0.95, 1.0, 1.0, "mp3", null, null, "feedback-" + eval.evaluationId()));
+        var audio = ttsProvider.synthesize(new TtsRequest(text, "en", voice, 0.95, 1.0, 1.0, "mp3", false, null, null, "feedback-" + eval.evaluationId()));
         return Map.of("text", text, "audioUrl", audio.audioUrl());
     }
 }

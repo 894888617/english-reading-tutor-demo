@@ -236,3 +236,65 @@ npm run dev
 2. 生产可用的 TTS 官方音色或自定义 voiceId / 复刻音色 ID。
 3. 专业口语评测服务账号（讯飞 / 有道 / 腾讯云 / 阿里语音评测），包括 App ID、API Key、API Secret、评测接口地址。
 4. 如切换百度 OCR 或腾讯 OCR，需提供对应密钥。
+
+## Audio recording, speech evaluation, and TTS troubleshooting
+
+### ffmpeg requirement for Web recordings
+
+Browser `MediaRecorder` commonly produces `audio/webm;codecs=opus` (or another browser-native container), not the raw PCM format required by iFlytek speech evaluation. The Java backend therefore accepts browser uploads such as WebM/Opus, MP3, WAV, M4A, OGG, and MP4 and transcodes them with `ffmpeg` before sending audio to iFlytek.
+
+Install `ffmpeg` locally if you run the backend outside Docker:
+
+- Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y ffmpeg`
+- macOS/Homebrew: `brew install ffmpeg`
+- Alpine: `apk add --no-cache ffmpeg`
+
+The backend Docker image installs `ffmpeg` automatically. You can override the executable path with `FFMPEG_PATH`.
+
+### Speech evaluation audio format
+
+The backend normalizes uploaded reading recordings to:
+
+- 16,000 Hz sample rate
+- mono channel
+- signed 16-bit little-endian PCM (`s16le`)
+- iFlytek business parameters: `aue=raw`, `auf=audio/L16;rate=16000`
+
+Relevant backend configuration:
+
+```yaml
+audio:
+  ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+  target-sample-rate: ${AUDIO_TARGET_SAMPLE_RATE:16000}
+  target-channels: ${AUDIO_TARGET_CHANNELS:1}
+  target-format: ${AUDIO_TARGET_FORMAT:pcm}
+  temp-dir: ${AUDIO_TEMP_DIR:./storage/audio-temp}
+```
+
+### Web recording behavior
+
+The frontend still records with `MediaRecorder` and uploads the real binary `Blob` as multipart field `file`; it does not upload only a blob URL. The upload also includes the current sentence's English `referenceText`, `bookId`, `pageId`, `sentenceId`, and actual recorder `mimeType`. After recording stops, the page creates a local preview URL so students can play the recording before and after scoring.
+
+### TTS volume troubleshooting
+
+TTS volume uses a 0-1 UI scale. The frontend applies the returned TTS `volume` to `HTMLAudioElement.volume`, ensures `muted=false`, and keeps browser `playbackRate` separate from generated TTS `speed`:
+
+- `speed`: affects generated audio and TTS cache keys.
+- `playbackRate`: affects only browser playback.
+- `volume`: sent to the backend/provider and applied to browser audio volume.
+
+The `/api/tts/synthesize` response includes the actual provider/model/voice/language/speed/pitch/volume/format/cacheHit values used by the backend. If the UI-selected voice differs from the returned voice, the student page shows a fallback notice.
+
+The TTS cache key includes text hash, model, voice, language, speed, pitch, volume, and format. Use `POST /api/tts/cache/clear` or the student page “清除 TTS 缓存” button to rule out stale cached audio while debugging.
+
+If audio is still too quiet with `audio.volume=1`, open the returned `/audio-cache/*.mp3` URL directly. If it is quiet there too, investigate provider output or volume parameters; if direct playback is normal, inspect frontend audio state.
+
+### VITE_API_BASE_URL
+
+When the frontend and backend run on different origins in development, set:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8080
+```
+
+The frontend resolves TTS and cached audio with `resolveAssetUrl(result.audioUrl)`. In production, `VITE_API_BASE_URL` may be empty if Nginx proxies `/api` and `/audio-cache` to the backend.

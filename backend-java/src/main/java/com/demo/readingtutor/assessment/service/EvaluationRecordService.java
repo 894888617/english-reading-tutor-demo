@@ -23,7 +23,7 @@ public class EvaluationRecordService {
         String id = result.evaluationId() == null || result.evaluationId().isBlank()
                 ? "eval_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12)
                 : result.evaluationId();
-        ReadingAssessmentResult withId = new ReadingAssessmentResult(id, result.targetText(), result.recognizedText(), result.score(), result.wordResults(), result.issues(), result.feedbackText(), result.feedbackAudioUrl());
+        ReadingAssessmentResult withId = new ReadingAssessmentResult(id, result.targetText(), result.recognizedText(), result.score(), result.wordResults(), result.issues(), result.feedbackText(), result.feedbackAudioUrl(), result.recordingUrl(), result.pcmGenerated());
         try {
             ensureDir();
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(DIR.resolve(id + ".json").toFile(), withId);

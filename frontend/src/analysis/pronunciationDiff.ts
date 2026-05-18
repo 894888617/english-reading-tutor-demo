@@ -36,6 +36,8 @@ export type ReadingAssessmentResult = {
   feedbackText: string;
   evaluationId?: string;
   feedbackAudioUrl?: string;
+  recordingUrl?: string;
+  pcmGenerated?: boolean;
 };
 
 export function tokenizeSentence(text: string): WordToken[] {

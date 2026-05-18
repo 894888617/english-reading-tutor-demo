@@ -194,11 +194,13 @@ public class IflytekSpeechEvalWebSocketClient {
             Map<String, Object> audioBusiness = new LinkedHashMap<>();
             audioBusiness.put("cmd", "auw");
             audioBusiness.put("aus", first ? 1 : last ? 4 : 2);
+            String chunkBase64 = Base64.getEncoder().encodeToString(chunks.get(i));
+            log.info("[IflytekEval] send audio frame aus={} status={} audioBase64Length={}", audioBusiness.get("aus"), last ? 2 : 1, chunkBase64.length());
             frames.add(objectMapper.writeValueAsString(Map.of(
                     "business", audioBusiness,
                     "data", Map.of(
                             "status", last ? 2 : 1,
-                            "data", Base64.getEncoder().encodeToString(chunks.get(i))
+                            "data", chunkBase64
                     )
             )));
         }

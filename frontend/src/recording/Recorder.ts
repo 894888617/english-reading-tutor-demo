@@ -23,8 +23,10 @@ export class Recorder {
     }
 
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = pickMimeType();
+    const mimeType = getSupportedAudioMimeType();
+    console.log('[Recorder] selected mimeType:', mimeType);
     this.mediaRecorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined);
+    console.log('[Recorder] actual mimeType:', this.mediaRecorder.mimeType);
     this.chunks = [];
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -79,7 +81,13 @@ export class Recorder {
   }
 }
 
-function pickMimeType(): string {
-  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/wav', 'audio/mp4'];
+export function getSupportedAudioMimeType(): string {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/wav',
+    'audio/mpeg',
+  ];
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }

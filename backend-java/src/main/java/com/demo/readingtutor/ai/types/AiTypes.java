@@ -18,6 +18,7 @@ public final class AiTypes {
             Double pitch,
             Double volume,
             String format,
+            Boolean forceRefresh,
             String bookId,
             String pageId,
             String sentenceId
