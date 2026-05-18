@@ -1,141 +1,169 @@
-# AI 英语阅读导师演示
+# AI 英语阅读陪练小程序
 
-H5 实时语音中文讲解式英语阅读练习 Demo：浏览器展示英文绘本句子与中文释义，点击 **开始陪练** 后通过浏览器麦克风采集 16 kHz、16 bit、单声道 PCM 音频，经 Java Spring Boot 后端 WebSocket 代理转发到阿里云百炼 Qwen3.5-Omni-Plus-Realtime。AI 默认使用中文讲解、鼓励和纠错，英文只用于朗读、带读、单词示范和简单练习。
+本项目已将 OCR、绘本朗读、跟读评分、发音纠错、短语音反馈、实时翻译、实时外教对话拆分为独立 Provider。生产默认不启用模拟数据；缺少服务密钥时返回明确错误，不再静默回退到固定文本或随机评分。
 
-当前版本使用 **WebSocket 代理模式**，不使用 WebRTC，不创建 Offer SDP，不做 SDP 交换，也不需要 `ALIYUN_WEBRTC_ENDPOINT`。
+## 模型与 Provider 拆分
 
-## 架构
+| 能力 | Provider / 模型 | 说明 |
+| --- | --- | --- |
+| OCR | `OCR_PROVIDER=dashscope`，`OCR_MODEL=qwen-vl-ocr-2025-11-20` | 图片与扫描 PDF 页面调用 DashScope Qwen-OCR；普通 PDF 优先提取内嵌文本。 |
+| 绘本朗读 | `TTS_PROVIDER=dashscope`，`TTS_MODEL=qwen3-tts-flash` | 固定文本走非实时 TTS，并写入本地音频缓存。 |
+| 跟读评分 | `SPEECH_EVAL_PROVIDER=iflytek` | 预留讯飞/专业口语评测 HTTP 端点；未配置账号时直接报“语音评测服务未配置”。 |
+| 发音纠错 | 语音评测返回的 word-level 结果 | 前端按 word status 标红错词，点击错词走 TTS 标准发音。 |
+| 短语音反馈 | 规则短反馈 + TTS | 跟读完成后生成儿童友好短句，并通过 TTS 缓存播放。 |
+| 实时翻译 | `qwen3-livetranslate-flash-realtime` | 独立 session 接口，不用于跟读评分。 |
+| 实时外教对话 | `qwen3.5-omni-plus-realtime` | 保留实时外教；前端检测插话后清空播放队列并发送 `response.cancel`。 |
 
-```text
-H5 React 前端
-  ↓ WebSocket: /ws/realtime
-Java Spring Boot 后端代理
-  ↓ WebSocket + Authorization: Bearer ${DASHSCOPE_API_KEY}
-阿里云百炼 Qwen3.5-Omni-Plus-Realtime
-```
-
-- 前端只连接 Java 后端，不直连阿里云，避免暴露 `DASHSCOPE_API_KEY`。
-- Java 后端负责连接阿里云 Realtime WebSocket，发送 `session.update`，并转发音频、文本与调试事件。
-- 保留 `GET /api/story` 和 `POST /api/logs`。
-- 废弃并移除 `POST /api/realtime/sdp`。
-
-## 技术栈
-
-### 前端
-
-- React
-- Vite
-- TypeScript
-- WebSocket
-- Web Audio API
-- ScriptProcessorNode（Demo 版本；后续可升级 AudioWorklet）
-
-### 后端
-
-- Java 17
-- Spring Boot 3.x
-- Spring Web
-- Spring WebSocket
-- Java 原生 `java.net.http.WebSocket`
-- Maven
-
-### AI 模型
-
-- 阿里云百炼 Qwen3.5-Omni-Plus-Realtime
-- 默认模型：`qwen3.5-omni-plus-realtime`
-- 默认声音：`Jennifer`
-- 接入方式：WebSocket
-
-## 项目目录结构
+后端新增 AI 服务层：
 
 ```text
-english-reading-tutor-demo/
-├─ frontend/
-│  ├─ package.json
-│  ├─ vite.config.ts
-│  ├─ index.html
-│  └─ src/
-│     ├─ main.tsx
-│     ├─ App.tsx
-│     ├─ api.ts
-│     ├─ realtime-ws.ts
-│     ├─ story.ts
-│     └─ styles.css
-├─ backend-java/
-│  ├─ pom.xml
-│  └─ src/main/
-│     ├─ java/com/demo/readingtutor/
-│     │  ├─ ReadingTutorApplication.java
-│     │  ├─ config/RealtimeProperties.java
-│     │  ├─ config/WebSocketConfig.java
-│     │  ├─ controller/StoryController.java
-│     │  ├─ controller/LogController.java
-│     │  ├─ service/DashScopeRealtimeSession.java
-│     │  ├─ ws/RealtimeWebSocketHandler.java
-│     │  └─ dto/
-│     │     ├─ StoryResponse.java
-│     │     ├─ StoryPage.java
-│     │     ├─ StorySentence.java
-│     │     └─ LogRequest.java
-│     └─ resources/application.yml
-└─ README.md
+backend-java/src/main/java/com/demo/readingtutor/ai/
+  AiServices.java
+  ModelRegistry.java
+  cache/AudioCacheService.java
+  controller/{TtsController,FeedbackController,RealtimeAiController}.java
+  providers/{OcrProvider,TtsProvider,SpeechEvalProvider,DashScopeOcrProvider,DashScopeTtsProvider,IflytekSpeechEvalProvider,DashScopeRealtimeProvider}.java
+  types/AiTypes.java
 ```
 
-## 环境变量说明
+## 环境变量
 
-后端启动前需要配置：
+复制并编辑：
 
 ```bash
-export DASHSCOPE_API_KEY=你的阿里云百炼APIKey
-export DASHSCOPE_REALTIME_WS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
-export REALTIME_MODEL=qwen3.5-omni-plus-realtime
-export REALTIME_VOICE=Jennifer
+cp .env.example .env
 ```
 
-说明：
+关键变量：
 
-- `DASHSCOPE_API_KEY`：阿里云百炼 API Key，只在 Java 后端使用，前端不会拿到该密钥。
-- `DASHSCOPE_REALTIME_WS_URL`：阿里云 Realtime WebSocket 地址。
-  - 北京地址：`wss://dashscope.aliyuncs.com/api-ws/v1/realtime`
-  - 新加坡地址：`wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime`
-- `REALTIME_MODEL`：默认 `qwen3.5-omni-plus-realtime`。
-- `REALTIME_VOICE`：默认 `Jennifer`。请不要使用 `professional_english_teacher`；后端会将不支持的 voice 回退到 `Jennifer`。
-- 不需要也不再读取 `ALIYUN_WEBRTC_ENDPOINT`。
+```bash
+NODE_ENV=production
+ENABLE_AI_MOCK=false
 
-`backend-java/src/main/resources/application.yml` 默认配置：
+DASHSCOPE_API_KEY=
+DASHSCOPE_REGION=beijing
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+DASHSCOPE_REALTIME_WS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
 
-```yaml
-server:
-  port: 8080
+OCR_PROVIDER=dashscope
+OCR_MODEL=qwen-vl-ocr-2025-11-20
 
-aliyun:
-  dashscope:
-    api-key: ${DASHSCOPE_API_KEY:}
-    realtime-ws-url: ${DASHSCOPE_REALTIME_WS_URL:wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
-    realtime-model: ${REALTIME_MODEL:qwen3.5-omni-plus-realtime}
-    default-voice: ${REALTIME_VOICE:Jennifer}
+TTS_PROVIDER=dashscope
+TTS_MODEL=qwen3-tts-flash
+TTS_VOICE=Cherry
+TTS_LANGUAGE=English
+TTS_FORMAT=mp3
+TTS_SPEED=0.9
+TTS_PITCH=1.0
+TTS_VOLUME=1.0
+
+SPEECH_EVAL_PROVIDER=iflytek
+IFLYTEK_APP_ID=
+IFLYTEK_API_KEY=
+IFLYTEK_API_SECRET=
+IFLYTEK_EVAL_ENDPOINT=
+
+LIVE_TRANSLATE_MODEL=qwen3-livetranslate-flash-realtime
+REALTIME_TUTOR_MODEL=qwen3.5-omni-plus-realtime
+REALTIME_TUTOR_PROTOCOL=webrtc
+REALTIME_TUTOR_VAD_ENABLED=true
+REALTIME_TUTOR_INTERRUPT_ENABLED=true
+
+AUDIO_CACHE_DRIVER=local
+AUDIO_CACHE_DIR=./storage/audio-cache
+AUDIO_CACHE_TTL_DAYS=365
 ```
 
-## 后端启动方式
+> 本地开发如确需保留模拟评测/OCR，必须同时显式设置 `ENABLE_AI_MOCK=true` 与相应 mock provider；生产环境保持 `ENABLE_AI_MOCK=false`。
+
+## API 接口
+
+### OCR / 绘本上传
+
+- `POST /api/books/upload`
+  - `multipart/form-data`: `file`, `title`, `englishTitle`, `level`
+  - 图片：上传后立即 OCR，OCR 文本写入 `BookPage.rawText` 并自动切句。
+  - PDF：普通 PDF 优先提取内嵌文本；空文本页渲染成图片后调用 OCR。
+  - OCR 失败页返回 `needOcr=true` 与 `parseError`，老师后台可手动修正并保存。
+- `PUT /api/books/{bookId}`：保存老师人工修正后的 OCR 文本、句子、中文释义与重点词。
+
+### TTS 与声音控制
+
+- `GET /api/tts/voices`：返回当前模型允许使用的声音列表。
+- `POST /api/tts/synthesize`
+
+```json
+{
+  "text": "The little rabbit is looking for his red hat.",
+  "language": "en",
+  "voice": "Cherry",
+  "speed": 0.9,
+  "pitch": 1.0,
+  "volume": 1.0,
+  "bookId": "book_xxx",
+  "pageId": "1",
+  "sentenceId": "0"
+}
+```
+
+返回包含 `audioUrl`、`cacheHit`、`model`、`voice`。缓存 key 包含 `textHash + model + voice + speed + pitch + volume + language + format`，切换音色或语速不会命中旧音频。
+
+- `POST /api/tts/cache/clear`：清空本地音频缓存。
+
+### 跟读评分与发音纠错
+
+- `POST /api/speech/evaluate`
+  - `multipart/form-data`: `file`, `referenceText`, `sentenceId`, `bookId`, `pageId`
+  - 返回四维评分、word-level 结果与 `evaluationId`。
+- `GET /api/speech/evaluations/{id}`：读取已保存评分。
+
+### 短语音反馈
+
+- `POST /api/feedback/speech`
+
+```json
+{ "evaluationId": "eval_xxx", "voice": "Cherry" }
+```
+
+返回短反馈文本与 TTS 音频 URL。
+
+### 实时模块
+
+- `POST /api/realtime/live-translate/session`：创建实时翻译会话描述，模型固定为 `qwen3-livetranslate-flash-realtime`。
+- `POST /api/realtime/tutor/webrtc-session`：创建实时外教会话描述，模型固定为 `qwen3.5-omni-plus-realtime`。
+- `WebSocket /ws/realtime`：现有外教对话代理，支持 VAD 配置、`response.cancel`、用户插话清空播放队列。
+
+## 前端改造
+
+学生阅读页支持：
+
+- 整页朗读、逐句播放、重复本句、慢速播放、单词点读。
+- 外教声音选择、TTS 生成语速、pitch、volume、language、浏览器 playbackRate。
+- 当前 TTS 模型、实际 voice、是否缓存命中展示。
+- 录音上传评分、四维评分展示、错词标红、点击错词播放标准发音。
+- 跟读后短语音反馈播放。
+
+老师后台支持：
+
+- 图片 / PDF 上传。
+- OCR 结果预览、失败提示、手动修正文本。
+- 自动切句结果预览与保存。
+
+## 错误处理
+
+- 缺少 `DASHSCOPE_API_KEY`：返回 “DashScope API Key 未配置”。
+- 缺少 OCR Key：返回 “OCR 服务暂未配置，请先配置 API Key”。
+- 缺少语音评测账号：返回 “语音评测服务未配置”。
+- TTS 失败：前端提示 “朗读音频生成失败，请稍后重试”。
+- 语音评分失败：前端提示 “评分失败，请重新录音”。
+- 所有后端错误响应包含 `requestId`，日志包含 `requestId`，不会打印 API Key。
+
+## 启动与测试步骤
 
 ```bash
 cd backend-java
 mvn spring-boot:run
 ```
-
-后端默认监听：
-
-```text
-http://localhost:8080
-```
-
-关键接口：
-
-- `GET /api/story`：返回固定绘本内容。
-- `POST /api/logs`：Demo 日志接口，仅打印到控制台。
-- `WebSocket /ws/realtime`：浏览器实时语音会话入口。
-
-## 前端启动方式
 
 ```bash
 cd frontend
@@ -143,304 +171,28 @@ npm install
 npm run dev
 ```
 
-浏览器访问：
-
-```text
-http://localhost:5173
-```
-
-前端开发环境通过 Vite Proxy 将 `/api` 请求转发到 `http://localhost:8080`。生产环境由 Nginx 反向代理 `/api/` 和 `/ws/`；前端 API 固定使用 `/api`，实时语音 WebSocket 会根据当前页面协议和域名自动连接 `/ws/realtime`。
-
-
-## Docker 容器化部署
-
-项目根目录提供 `docker-compose.yml`，包含 `backend-java` 与 `frontend` 两个服务：
-
-- `backend-java`：Spring Boot 后端，容器名 `ai-reading-backend`，监听容器内 `8080`。
-- `frontend`：Nginx 托管 Vite 构建产物，容器名 `ai-reading-frontend`，宿主机暴露 `8088:80`。
-- Nginx 会托管 H5 静态页面，并代理 `/api/` 到后端 `/api/`、代理 `/ws/` 到后端 `/ws/`，支持 WebSocket Upgrade。
-- 上传文件和绘本 JSON 元数据挂载到宿主机 `./data/uploads`、`./data/books`、`./data/covers`，日志目录挂载到 `./logs`，容器重启后数据不丢失。
-
-部署步骤：
-
-```bash
-cp .env.example .env
-```
-
-编辑 `.env`，至少填写：
-
-```bash
-DASHSCOPE_API_KEY=你的阿里云百炼APIKey
-```
-
-默认 mock 配置如下，适合先完成页面、上传、评分和 OCR 流程联调：
-
-```bash
-ASSESSMENT_PROVIDER=mock
-OCR_PROVIDER=mock
-REALTIME_VOICE=Jennifer
-```
-
-创建持久化目录：
-
-```bash
-mkdir -p data/uploads data/books data/covers logs
-```
-
-构建并后台启动：
-
-```bash
-docker compose up -d --build
-```
-
-查看后端日志：
-
-```bash
-docker logs -f ai-reading-backend
-```
-
-查看前端日志：
-
-```bash
-docker logs -f ai-reading-frontend
-```
-
-浏览器访问：
-
-```text
-http://服务器IP:8088
-```
-
-常用验收命令：
-
-```bash
-curl http://服务器IP:8088/api/story
-curl http://服务器IP:8088/api/books
-```
-
-实时语音会从页面当前地址自动建立 WebSocket：
-
-```ts
-const WS_URL =
-  window.location.protocol === "https:"
-    ? `wss://${window.location.host}/ws/realtime`
-    : `ws://${window.location.host}/ws/realtime`;
-```
-
-## 前后端 WebSocket 协议
-
-前端发送 JSON 控制消息。`start_lesson` 和 `update_sentence` 会携带当前上传绘本的标题、等级、页码、英文句子、中文释义和重点词，Java 后端据此动态生成中文讲解式 AI Prompt。
-
-```json
-{
-  "type": "start_lesson",
-  "book": {
-    "id": "book_001",
-    "title": "小兔子",
-    "englishTitle": "The Little Rabbit",
-    "level": "初学者"
-  },
-  "pageNo": 1,
-  "currentSentence": {
-    "english": "The little rabbit is looking for his red hat.",
-    "chinese": "小兔子正在找他的红帽子。",
-    "keywords": [
-      { "word": "rabbit", "meaning": "小兔子" },
-      { "word": "red hat", "meaning": "红帽子" }
-    ]
-  }
-}
-```
-
-```json
-{
-  "type": "update_sentence",
-  "book": {
-    "id": "book_001",
-    "title": "小兔子",
-    "englishTitle": "The Little Rabbit",
-    "level": "初学者"
-  },
-  "pageNo": 1,
-  "currentSentence": {
-    "english": "He asks the bird, have you seen my hat?",
-    "chinese": "他问鸟儿：你见过我的帽子吗？",
-    "keywords": [
-      { "word": "bird", "meaning": "鸟儿" },
-      { "word": "hat", "meaning": "帽子" }
-    ]
-  }
-}
-```
-
-```json
-{
-  "type": "repeat_sentence",
-  "currentSentence": {
-    "english": "The little rabbit is looking for his red hat.",
-    "chinese": "小兔子正在找他的红帽子。"
-  }
-}
-```
-
-```json
-{ "type": "stop" }
-```
-
-前端发送 Binary 消息：
-
-- 16 kHz、16 bit、单声道 PCM。
-- 每个 chunk 约 100 ms。
-- Java 后端 base64 编码后以 `input_audio_buffer.append` 转发给阿里云。
-
-后端发送 JSON 消息：
-
-- `{ "type": "status", "message": "已连接到百炼实时语音模型。" }`
-- `{ "type": "dashscope_event", "event": { } }`
-- `{ "type": "ai_text_delta", "text": "..." }`
-- `{ "type": "ai_text_done", "text": "..." }`
-- `{ "type": "error", "message": "具体错误" }`
-
-后端发送 Binary 消息：
-
-- 阿里云 `response.audio.delta` 解码后的 PCM bytes。
-- 前端通过 Web Audio API 排队播放，避免音频块重叠。
-
-## 本地测试步骤
-
-1. 准备阿里云百炼 API Key，并确认该 Key 有权访问实时 WebSocket 模型。
-2. 设置环境变量：
-
-   ```bash
-   export DASHSCOPE_API_KEY=你的阿里云百炼APIKey
-   export DASHSCOPE_REALTIME_WS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
-   export REALTIME_MODEL=qwen3.5-omni-plus-realtime
-   export REALTIME_VOICE=Jennifer
-   ```
-
-3. 启动后端：
-
-   ```bash
-   cd backend-java
-   mvn spring-boot:run
-   ```
-
-4. 验证绘本接口：
-
-   ```bash
-   curl http://localhost:8080/api/story
-   ```
-
-5. 启动前端：
-
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-
-6. 打开浏览器访问 `http://localhost:5173`。
-7. 确认页面展示绘本标题、等级、当前页、当前句子和调试区。
-8. 点击“开始陪练”，允许浏览器麦克风权限。
-9. 观察调试区：应看到浏览器 WebSocket 连接、后端连接阿里云、`session.update`、音频 chunk 发送、阿里云事件和 AI 文本增量。
-10. 听 AI 老师先用中文说明当前句子，再朗读英文、解释中文意思、拆解重点词并带读。
-11. 点击“重复朗读”，AI 应重新朗读英文句子，并用中文提醒学生跟读。
-12. 点击“下一句”，页面高亮更新，前端发送 `update_sentence`，Java 后端发送新的中文教学 `session.update`，AI 围绕新句子继续。
-13. 点击“结束会话”，确认麦克风释放、播放队列清理、浏览器 WebSocket 和阿里云 WebSocket 关闭。
-
-## 常见问题
-
-### 1. WebSocket 连接失败应该检查什么？
-
-- 后端是否运行在 `http://localhost:8080`。
-- `DASHSCOPE_API_KEY` 是否已设置，且没有过期。
-- `DASHSCOPE_REALTIME_WS_URL` 是否为可用区域地址。
-- `REALTIME_MODEL` 是否为 `qwen3.5-omni-plus-realtime` 或你的账号可用的实时模型。
-- API Key 是否有百炼实时语音 WebSocket 访问权限。
-- 浏览器是否允许麦克风权限。
-- 页面是否通过 `http://localhost` 或 HTTPS 打开；非安全上下文可能无法调用麦克风。
-- 公司代理、防火墙或本机网络是否阻断 WebSocket 请求。
-
-### 2. 页面加载不到绘本怎么办？
-
-- 确认后端运行在 `http://localhost:8080`。
-- 直接访问 `http://localhost:8080/api/story` 检查接口。
-- Docker 部署时确认 frontend Nginx 代理正常：访问 `http://服务器IP:8088/api/story` 检查接口。
-
-### 3. 为什么后端不把 API Key 返回给前端？
-
-API Key 属于服务端密钥。前端只发送控制消息和 PCM 音频给 Java 后端，由后端添加 `Authorization: Bearer ${DASHSCOPE_API_KEY}` 后连接阿里云，避免密钥泄露。
-
-### 4. AI 回答跑题怎么办？
-
-开始课程和切换句子时，Java 后端都会发送中文教学 `session.update`，其中 `instructions` 明确要求 AI 主要使用中文，按“中文说明当前句子 → 朗读英文 → 中文解释 → 讲重点词 → 带读 → 问一个简单问题”的流程教学，只围绕当前绘本和当前句子讲解、提问、纠错，不做开放闲聊。
-
-## 绘本上传说明
-
-当前 Demo 支持：
-
-- 普通 PDF 文本提取：后端使用 Apache PDFBox 按页提取文本，并按 `. ? !` 自动切分英文句子。
-- JPG / PNG 上传：Demo 阶段会创建绘本页面，并通过 OCR 预留接口提示用户手动填写英文文本。
-- 扫描版 PDF 和图片 OCR 预留：默认 `ocr.provider=mock`，后续可替换为百度 OCR / 腾讯 OCR / 阿里 OCR。
-- 上传后编辑：前端支持修改标题、等级、页面原始文本、英文句子、中文意思和重点词，也可以新增或删除句子。
-
-注意：
-
-- 如果 PDF 是扫描版，可能无法自动提取文本。
-- 如果 OCR 服务未配置，需要手动填写英文句子。
-- 上传后建议先校对英文句子，再开始 AI 学习。
-- Demo 阶段使用本地文件和 JSON 元数据存储，不使用数据库。
-
-本地存储目录：
-
-```text
-backend-java/
-├─ data/
-│  ├─ uploads/   # 原始上传文件
-│  ├─ books/     # book-{bookId}.json
-│  └─ covers/    # 封面图片预留目录
-```
-
-上传限制默认配置：
-
-```yaml
-app:
-  upload:
-    max-file-size-mb: 50
-    max-pdf-pages: 30
-
-ocr:
-  provider: mock
-  baidu:
-    api-key:
-    secret-key:
-  tencent:
-    secret-id:
-    secret-key:
-```
-
-新增绘本接口：
-
-- `POST /api/books/upload`：上传并解析 PDF / JPG / PNG。
-- `GET /api/books`：获取绘本列表；没有上传绘本时返回默认测试绘本。
-- `GET /api/books/{bookId}`：获取完整绘本详情。
-- `PUT /api/books/{bookId}`：保存校对后的绘本内容。
-- `DELETE /api/books/{bookId}`：删除绘本 JSON 和原始上传文件。
-- `GET /api/story`：保留兼容旧 Demo，返回默认测试绘本。
-
-推荐学习流程：
-
-```text
-1. 打开页面
-2. 点击“上传绘本”
-3. 选择 PDF / JPG / PNG
-4. 系统解析
-5. 页面展示解析出的页和句子
-6. 用户校对英文句子、中文意思、关键词
-7. 点击“保存绘本”
-8. 点击“开始学习这本绘本”
-9. AI 按该绘本当前句子进行中文讲解和英文带读
-10. 用户跟读
-11. AI 指出问题和改进建议
-12. 进入下一句
-```
+验收建议：
+
+1. 配置 `DASHSCOPE_API_KEY`，上传英文绘本图片，确认页面显示 OCR 真实文本。
+2. 上传普通 PDF，确认优先提取内嵌文本。
+3. 上传扫描 PDF，确认按页 OCR；失败页在老师后台可人工修正。
+4. 点击整页朗读、逐句播放、单词点读，确认播放 `/audio-cache/*.mp3`。
+5. 切换 `voice/speed/pitch/volume`，确认返回的 `model/voice/cacheHit` 与 UI 一致，且不会播放旧 voice 缓存。
+6. 配置专业语音评测账号，提交录音，确认返回四维评分与 word-level 纠错。
+7. 实时外教播放时插话，确认前端清空本地播放队列并发送 `response.cancel`。
+
+## 已处理的模拟逻辑清单
+
+- 生产默认 `ENABLE_AI_MOCK=false`。
+- OCR 默认 provider 从 mock 改为 DashScope。
+- 跟读评分默认 provider 从 mock 改为专业语音评测 provider。
+- 缺少 API Key 不再返回固定 OCR 文本或模拟评分，改为明确错误。
+- 固定绘本朗读不再走 realtime 对话模型，改为 TTS + 缓存。
+- 短语音反馈不再走 realtime 对话模型，改为短文本 + TTS。
+
+## 仍需甲方提供的三方账号
+
+1. DashScope / 阿里云百炼 API Key（OCR、TTS、实时翻译、实时外教）。
+2. 生产可用的 TTS 官方音色或自定义 voiceId / 复刻音色 ID。
+3. 专业口语评测服务账号（讯飞 / 有道 / 腾讯云 / 阿里语音评测），包括 App ID、API Key、API Secret、评测接口地址。
+4. 如切换百度 OCR 或腾讯 OCR，需提供对应密钥。

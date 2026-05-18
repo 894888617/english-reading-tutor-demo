@@ -51,6 +51,7 @@ export class RealtimeWsClient {
   private nextPlaybackTime = 0;
   private playbackSources: AudioBufferSourceNode[] = [];
   private responseState: ResponseState = { hasActiveResponse: false, activeResponseId: null };
+  private lastInterruptAt = 0;
 
   async connect(options: RealtimeWsOptions): Promise<void> {
     this.options = options;
@@ -213,6 +214,7 @@ export class RealtimeWsClient {
       return;
     }
     const channel = inputBuffer.getChannelData(0);
+    this.cancelPlaybackOnUserSpeech(channel);
     const resampled = downsampleFloat32(channel, this.audioContext.sampleRate, TARGET_SAMPLE_RATE);
     for (const sample of resampled) {
       this.pendingInputSamples.push(sample);
@@ -274,6 +276,29 @@ export class RealtimeWsClient {
       this.emitDebug('status', event.message ?? `实时事件：${type}`, event);
     } catch (error) {
       this.emitDebug('event', `收到非 JSON WebSocket 消息：${String(data)}`, error);
+    }
+  }
+
+  private cancelPlaybackOnUserSpeech(channel: Float32Array): void {
+    if (!this.responseState.hasActiveResponse && this.playbackSources.length === 0) {
+      return;
+    }
+    let sum = 0;
+    for (let index = 0; index < channel.length; index += 1) {
+      sum += channel[index] * channel[index];
+    }
+    const rms = Math.sqrt(sum / Math.max(channel.length, 1));
+    const now = Date.now();
+    if (rms > 0.035 && now - this.lastInterruptAt > 800) {
+      this.lastInterruptAt = now;
+      this.clearPlaybackQueue();
+      try {
+        this.sendControlMessage({ type: 'stop_playback' });
+        this.emitDebug('status', '检测到用户插话，已发送 response.cancel 并清空本地播放队列。');
+      } catch (error) {
+        this.emitDebug('error', `打断 AI 播放失败：${String(error)}`);
+      }
+      this.responseState = { hasActiveResponse: false, activeResponseId: null };
     }
   }
 

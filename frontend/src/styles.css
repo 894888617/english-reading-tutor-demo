@@ -714,3 +714,18 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+.tts-control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.tts-control-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #445;
+  font-size: 13px;
+}

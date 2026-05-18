@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { assessReading, deleteBook, getBook, listBooks, saveLog, updateBook, uploadBook } from './api';
+import { assessReading, createSpeechFeedback, deleteBook, getBook, getTtsVoices, listBooks, saveLog, synthesizeTts, updateBook, uploadBook, type TtsVoice } from './api';
 import { RealtimeWsClient, type ConnectionStatus, type MicStatus, type RealtimeDebugEvent } from './realtime-ws';
 import { tokenizeSentence, wordMeaning, type ReadingAssessmentResult, type ReadMode, type RecordingStatus, type VoiceStyle, type WordToken } from './analysis/pronunciationDiff';
 import { Recorder, type RecorderResult } from './recording/Recorder';
@@ -101,7 +101,14 @@ function App() {
   const [uploadLevel, setUploadLevel] = useState('初学者');
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>('professional_female');
+  const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>('Cherry');
+  const [ttsVoices, setTtsVoices] = useState<TtsVoice[]>([]);
+  const [ttsSpeed, setTtsSpeed] = useState(0.9);
+  const [ttsPitch, setTtsPitch] = useState(1.0);
+  const [ttsVolume, setTtsVolume] = useState(1.0);
+  const [ttsLanguage, setTtsLanguage] = useState<'en' | 'zh'>('en');
+  const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [currentTtsMeta, setCurrentTtsMeta] = useState('未生成朗读音频');
   const [isAiPlaying, setIsAiPlaying] = useState(false);
   const [readMode, setReadMode] = useState<ReadMode | null>(null);
   const [selectedWord, setSelectedWord] = useState<WordToken | null>(null);
@@ -111,10 +118,12 @@ function App() {
   const recorderRef = useRef<Recorder | null>(null);
   const readTimerRef = useRef<number | null>(null);
   const realtimeClientRef = useRef<RealtimeWsClient | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const logIdRef = useRef(1);
 
   useEffect(() => {
     void refreshBooks();
+    void loadTtsVoices();
     return () => {
       realtimeClientRef.current?.close();
       recorderRef.current?.reset();
@@ -137,9 +146,10 @@ function App() {
   }, [assessmentResult, currentSentence?.english, keywords, selectedWord]);
   const hasCurrentSentence = Boolean(currentSentence?.english.trim());
   const isRecordingOrScoring = recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring';
-  const canUseReadingControls = isConnected && hasCurrentSentence && !isAiPlaying && !isRecordingOrScoring;
+  const canUseReadingControls = hasCurrentSentence && !isAiPlaying && !isRecordingOrScoring;
   const recordingStatusLabels: Record<RecordingStatus, string> = { idle: '未录音', recording: '录音中', uploading: '识别中', scoring: '评分中', done: '已完成', failed: '失败' };
-  const voiceStyleLabels: Record<VoiceStyle, string> = { professional_female: '专业外教女声', professional_male: '专业外教男声', child_friendly_female: '儿童友好女声', child_friendly_male: '儿童友好男声' };
+  const voiceStyleLabels = Object.fromEntries(ttsVoices.map((voice) => [voice.id, voice.name])) as Record<string, string>;
+  const selectedVoice = ttsVoices.find((voice) => voice.id === voiceStyle);
 
   const progressLabel = useMemo(() => {
     if (!selectedBook || !currentPage) {
@@ -161,6 +171,20 @@ function App() {
       { id: logIdRef.current++, time: nowLabel(), kind, message },
       ...currentLogs,
     ].slice(0, 100));
+  }
+
+
+  async function loadTtsVoices() {
+    try {
+      const voices = await getTtsVoices();
+      setTtsVoices(voices);
+      if (voices.length && !voices.some((voice) => voice.id === voiceStyle)) {
+        setVoiceStyle(voices[0].id);
+      }
+    } catch (error) {
+      setErrorMessage(`语音服务暂未配置，请联系管理员：${String(error)}`);
+      appendLog('error', `声音列表加载失败：${String(error)}`);
+    }
   }
 
   async function refreshBooks(nextSelectedId?: string) {
@@ -371,10 +395,6 @@ function App() {
   }
 
   function ensureConnectedForReading(): boolean {
-    if (!isConnected) {
-      setErrorMessage('请先点击“开始学习这本绘本”，连接 AI 外教声音。');
-      return false;
-    }
     if (isAiPlaying) {
       setErrorMessage('AI 正在朗读，请稍后再操作。');
       return false;
@@ -385,6 +405,38 @@ function App() {
     }
     setErrorMessage('');
     return true;
+  }
+
+  async function playTts(text: string, mode: ReadMode, speedOverride?: number) {
+    const effectiveSpeed = speedOverride ?? ttsSpeed;
+    setIsAiPlaying(true);
+    try {
+      const result = await synthesizeTts({
+        text,
+        language: ttsLanguage,
+        voice: voiceStyle,
+        speed: effectiveSpeed,
+        pitch: ttsPitch,
+        volume: ttsVolume,
+        bookId: selectedBook?.id,
+        pageId: currentPage?.pageNo ? String(currentPage.pageNo) : undefined,
+        sentenceId: currentSentenceIndex >= 0 ? String(currentSentenceIndex) : undefined,
+        format: 'mp3',
+      });
+      audioRef.current?.pause();
+      const audio = new Audio(`${result.audioUrl}?v=${encodeURIComponent(`${result.model}-${result.voice}-${effectiveSpeed}-${ttsPitch}-${ttsVolume}`)}`);
+      audio.playbackRate = playbackRate;
+      audioRef.current = audio;
+      setCurrentTtsMeta(`${result.model} / ${result.voice} / ${effectiveSpeed}x / ${result.cacheHit ? '缓存命中' : '新生成'}`);
+      setReadMode(mode);
+      audio.onended = () => setIsAiPlaying(false);
+      audio.onerror = () => { setIsAiPlaying(false); setErrorMessage('朗读音频生成失败，请稍后重试'); };
+      await audio.play();
+    } catch (error) {
+      setIsAiPlaying(false);
+      setErrorMessage(`朗读音频生成失败，请稍后重试。${String(error)}`);
+      appendLog('error', `TTS 失败：${String(error)}`);
+    }
   }
 
   function estimatePageHighlight(sentences: Sentence[]) {
@@ -402,8 +454,8 @@ function App() {
   }
 
   function handleReadPage() {
-    if (!isConnected || isAiPlaying) {
-      setErrorMessage(isAiPlaying ? 'AI 正在朗读，请稍后再操作。' : '请先点击“开始学习这本绘本”，连接 AI 外教声音。');
+    if (isAiPlaying) {
+      setErrorMessage('AI 正在朗读，请稍后再操作。');
       return;
     }
     const sentences = currentPage?.sentences.filter((sentence) => sentence.english.trim()) ?? [];
@@ -411,16 +463,14 @@ function App() {
       setErrorMessage('当前没有可朗读的句子。');
       return;
     }
-    realtimeClientRef.current?.readPage(currentPage.pageNo, sentences.map((sentence) => sentence.english), 'normal');
-    setReadMode('page');
+    void playTts(sentences.map((sentence) => sentence.english).join(' '), 'page');
     estimatePageHighlight(sentences);
-    appendLog('reading', '开始整页朗读。');
+    appendLog('reading', '开始整页朗读（TTS 缓存）。');
   }
 
   function handleReadSentence(speed: 'normal' | 'slow' = 'normal') {
     if (!ensureConnectedForReading()) return;
-    realtimeClientRef.current?.readSentence(currentSentence!.english, speed);
-    setReadMode(speed === 'slow' ? 'slow' : 'sentence');
+    void playTts(currentSentence!.english, speed === 'slow' ? 'slow' : 'sentence', speed === 'slow' ? Math.min(ttsSpeed, 0.75) : ttsSpeed);
     appendLog('reading', speed === 'slow' ? '开始慢速播放当前句。' : '开始逐句播放当前句。');
   }
 
@@ -434,8 +484,7 @@ function App() {
       return;
     }
     try {
-      realtimeClientRef.current?.repeatSentence(currentSentence);
-      setReadMode('repeat');
+      void playTts(currentSentence.english, 'repeat');
       appendLog('reading', `重复本句：${currentSentence.english}`);
     } catch (error) {
       setErrorMessage(String(error));
@@ -478,6 +527,8 @@ function App() {
 
   function handleStopPlayback() {
     realtimeClientRef.current?.stopPlayback();
+    audioRef.current?.pause();
+    audioRef.current = null;
     setIsAiPlaying(false);
     if (readTimerRef.current) window.clearTimeout(readTimerRef.current);
     appendLog('reading', '暂停播放。');
@@ -487,7 +538,8 @@ function App() {
     setVoiceStyle(nextStyle);
     try {
       realtimeClientRef.current?.updateVoiceStyle(nextStyle);
-      appendLog('system', `已切换外教声音：${voiceStyleLabels[nextStyle]}`);
+      setCurrentTtsMeta(`已切换音色：${voiceStyleLabels[nextStyle] ?? nextStyle}`);
+      appendLog('system', `已切换外教声音：${voiceStyleLabels[nextStyle] ?? nextStyle}`);
     } catch {
       appendLog('system', `外教声音将在下次连接时生效：${voiceStyleLabels[nextStyle]}`);
     }
@@ -508,8 +560,7 @@ function App() {
     }
     setSelectedWord({ ...token, meaning: token.meaning ?? wordMeaning(token.text, keywords), status: 'current' });
     try {
-      realtimeClientRef.current?.readWord(token.text, currentSentence.english);
-      setReadMode('word');
+      void playTts(token.text, 'word', Math.min(ttsSpeed, 0.85));
       appendLog('reading', `单词点读：${token.text}`);
     } catch (error) {
       setErrorMessage(String(error));
@@ -584,8 +635,13 @@ function App() {
       appendLog('assessment', `评分完成：总分 ${result.score.totalScore}`);
       result.issues.filter((issue) => issue.type === 'missed').forEach((issue) => appendLog('correction', `发现漏读词：${issue.targetWord ?? ''}`));
       try {
-        realtimeClientRef.current?.sendAssessmentFeedback(result);
-        appendLog('assessment', 'AI反馈完成');
+        if (result.evaluationId) {
+          const feedback = await createSpeechFeedback({ evaluationId: result.evaluationId, voice: voiceStyle });
+          const audio = new Audio(feedback.audioUrl);
+          audio.playbackRate = playbackRate;
+          await audio.play();
+        }
+        appendLog('assessment', 'AI 语音反馈完成');
       } catch (error) {
         appendLog('error', `模型语音反馈失败：${String(error)}`);
       }
@@ -601,7 +657,7 @@ function App() {
       <section className="hero-card">
         <div>
           <p className="eyebrow">绘本上传 + 中文讲解 + 英文朗读 + 实时语音互动</p>
-          <h1>H5 中文讲解式 AI 英语阅读导师 Demo</h1>
+          <h1>AI 英语阅读陪练</h1>
           <p className="subtitle">上传 PDF、JPG 或 PNG 绘本，校对句子后让 AI 老师围绕当前绘本逐句带读和反馈。</p>
         </div>
         <div className={`status-pill status-${connectionStatus}`}>{connectionStatusLabels[connectionStatus]}</div>
@@ -729,19 +785,32 @@ function App() {
 
           <div className="learning-section">
             <div className="section-title-row"><h3>朗读控制区</h3><span>当前模式：{readMode ?? '未播放'}</span></div>
-            <label className="voice-select">外教声音
-              <select value={voiceStyle} onChange={(event) => handleVoiceStyleChange(event.target.value as VoiceStyle)}>
-                {Object.entries(voiceStyleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-            </label>
+            <div className="tts-control-grid">
+              <label className="voice-select">外教声音
+                <select value={voiceStyle} onChange={(event) => handleVoiceStyleChange(event.target.value as VoiceStyle)}>
+                  {ttsVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {voice.language}</option>)}
+                </select>
+              </label>
+              <label>语言
+                <select value={ttsLanguage} onChange={(event) => setTtsLanguage(event.target.value as 'en' | 'zh')}>
+                  <option value="en">English</option>
+                  <option value="zh">Chinese</option>
+                </select>
+              </label>
+              <label>生成语速<input type="number" min="0.5" max="1.5" step="0.05" value={ttsSpeed} onChange={(event) => setTtsSpeed(Number(event.target.value))} /></label>
+              <label>Pitch<input type="number" min="0.5" max="1.5" step="0.05" value={ttsPitch} onChange={(event) => setTtsPitch(Number(event.target.value))} /></label>
+              <label>Volume<input type="number" min="0.1" max="2" step="0.05" value={ttsVolume} onChange={(event) => setTtsVolume(Number(event.target.value))} /></label>
+              <label>播放倍速<input type="number" min="0.5" max="1.5" step="0.05" value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} /></label>
+            </div>
+            <p className="help-text">当前音色：{selectedVoice ? `${selectedVoice.name}（${selectedVoice.id} / ${selectedVoice.model}）` : voiceStyle}；{currentTtsMeta}</p>
             <div className="button-row">
-              <button type="button" onClick={handleReadPage} disabled={!isConnected || !currentPage?.sentences.length || isAiPlaying || isRecordingOrScoring}>整页朗读</button>
+              <button type="button" onClick={handleReadPage} disabled={!currentPage?.sentences.length || isAiPlaying || isRecordingOrScoring}>整页朗读</button>
               <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>逐句播放</button>
               <button type="button" onClick={handleRepeat} disabled={!canUseReadingControls}>重复本句</button>
               <button type="button" onClick={() => handleReadSentence('slow')} disabled={!canUseReadingControls}>慢速播放</button>
               <button type="button" className="danger" onClick={handleStopPlayback} disabled={!isAiPlaying}>暂停播放</button>
-              <button type="button" onClick={() => moveSentence(-1)} disabled={!isConnected || atFirstSentence}>上一句</button>
-              <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>下一句</button>
+              <button type="button" onClick={() => moveSentence(-1)} disabled={atFirstSentence}>上一句</button>
+              <button type="button" onClick={() => moveSentence(1)} disabled={atLastSentence}>下一句</button>
             </div>
           </div>
 
@@ -753,7 +822,7 @@ function App() {
               <button type="button" onClick={handleResetRecording} disabled={recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>重新录音</button>
               <button type="button" onClick={() => void handleSubmitAssessment()} disabled={!recordingResult || recordingStatus === 'recording' || recordingStatus === 'uploading' || recordingStatus === 'scoring'}>{recordingStatus === 'scoring' ? '正在评分' : '提交评分'}</button>
               {assessmentResult && <button type="button" onClick={() => handleReadSentence('normal')} disabled={!canUseReadingControls}>再读整句</button>}
-              {assessmentResult && <button type="button" onClick={() => moveSentence(1)} disabled={!isConnected || atLastSentence}>下一句</button>}
+              {assessmentResult && <button type="button" onClick={() => moveSentence(1)} disabled={atLastSentence}>下一句</button>}
             </div>
             {recordingResult && <p className="help-text">已录音 {(recordingResult.durationMs / 1000).toFixed(1)} 秒，点击“提交评分”查看发音纠正。</p>}
           </div>

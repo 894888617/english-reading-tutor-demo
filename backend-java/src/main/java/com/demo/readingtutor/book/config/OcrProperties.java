@@ -4,12 +4,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "ocr")
 public class OcrProperties {
-    private String provider = "mock";
+    private String provider = "dashscope";
+    private String model = "qwen-vl-ocr-2025-11-20";
     private final Baidu baidu = new Baidu();
     private final Tencent tencent = new Tencent();
 
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }
+    public String getModel() { return model; }
+    public void setModel(String model) { this.model = model; }
     public Baidu getBaidu() { return baidu; }
     public Tencent getTencent() { return tencent; }
 
