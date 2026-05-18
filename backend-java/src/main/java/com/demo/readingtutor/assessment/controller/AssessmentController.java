@@ -2,12 +2,17 @@ package com.demo.readingtutor.assessment.controller;
 
 import com.demo.readingtutor.assessment.config.AssessmentProperties;
 import com.demo.readingtutor.assessment.dto.ReadingAssessmentResult;
+import com.demo.readingtutor.assessment.dto.WordToken;
 import com.demo.readingtutor.assessment.service.EvaluationRecordService;
 import com.demo.readingtutor.assessment.service.SpeechAssessmentService;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 public class AssessmentController {
@@ -22,7 +27,7 @@ public class AssessmentController {
     }
 
     @PostMapping(value = "/api/speech/evaluate", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ReadingAssessmentResult evaluateSpeech(
+    public Map<String, Object> evaluateSpeech(
             @RequestParam(value = "file", required = false) MultipartFile file,
             @RequestParam(value = "referenceText", required = false) String referenceText,
             @RequestParam(value = "sentenceId", required = false) String sentenceId,
@@ -31,7 +36,42 @@ public class AssessmentController {
             @RequestParam(value = "recognizedText", required = false) String recognizedText
     ) {
         validate(file, referenceText, "file");
-        return assessmentService.assess(file, referenceText.trim(), recognizedText);
+        ReadingAssessmentResult result = assessmentService.assess(file, referenceText.trim(), recognizedText);
+        Map<String, Object> data = toSpeechEvaluationData(result);
+        return Map.of("success", true, "data", data);
+    }
+
+    private Map<String, Object> toSpeechEvaluationData(ReadingAssessmentResult result) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("evaluationId", result.evaluationId());
+        data.put("totalScore", result.score().totalScore());
+        data.put("accuracyScore", result.score().accuracyScore());
+        data.put("fluencyScore", result.score().fluencyScore());
+        data.put("completenessScore", result.score().completenessScore());
+        data.put("clarityScore", result.score().clarityScore());
+        List<Map<String, Object>> words = result.wordResults().stream().map(this::toWordData).toList();
+        data.put("words", words);
+        data.put("targetText", result.targetText());
+        data.put("recognizedText", result.recognizedText());
+        data.put("score", result.score());
+        data.put("wordResults", result.wordResults());
+        data.put("issues", result.issues());
+        data.put("feedbackText", result.feedbackText());
+        data.put("feedbackAudioUrl", result.feedbackAudioUrl());
+        data.put("recordingUrl", result.recordingUrl());
+        data.put("pcmGenerated", result.pcmGenerated());
+        return data;
+    }
+
+    private Map<String, Object> toWordData(WordToken token) {
+        Map<String, Object> word = new LinkedHashMap<>();
+        word.put("index", token.index());
+        word.put("word", token.text());
+        word.put("text", token.text());
+        word.put("normalized", token.normalized());
+        word.put("status", token.status());
+        word.put("meaning", token.meaning());
+        return word;
     }
 
     @PostMapping(value = "/api/assessment/reading", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -110,18 +110,24 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
     }
 
     private SpeechEvalResult parseResult(JsonNode root) {
-        root = unwrapIflytekWebSocketResult(root);
+        root = unwrapIflytekResult(root);
         JsonNode scores = root.has("scores") ? root.path("scores") : root;
         int accuracy = score(scores, "accuracyScore", "accuracy");
         int fluency = score(scores, "fluencyScore", "fluency");
         int completeness = score(scores, "completenessScore", "completeness");
         int clarity = score(scores, "clarityScore", "clarity");
-        int total = scores.path("totalScore").asInt(scores.path("total").asInt(Math.round((accuracy + fluency + completeness + clarity) / 4f)));
+        int total = score(scores, "totalScore", "total");
+        if (total <= 0) {
+            total = Math.round((accuracy + fluency + completeness + clarity) / 4f);
+        }
+        if (total <= 0 && accuracy <= 0 && fluency <= 0 && completeness <= 0 && clarity <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测结果解析失败：未找到最终评分结果");
+        }
         List<SpeechWord> words = new ArrayList<>();
         JsonNode wordNode = root.has("words") ? root.path("words") : root.path("data").path("words");
         if (wordNode.isArray()) {
             for (JsonNode w : wordNode) {
-                int wordScore = w.path("score").asInt(0);
+                int wordScore = normalizeScore(w.path("score").asDouble(0));
                 words.add(new SpeechWord(
                         w.path("word").asText(""),
                         wordScore,
@@ -137,6 +143,8 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
         } else if (StringUtils.hasText(root.path("rawXml").asText(""))) {
             words.addAll(parseXmlWords(root.path("rawXml").asText()));
         }
+        log.info("final evaluation result parsed totalScore={} accuracyScore={} fluencyScore={} completenessScore={} clarityScore={} words={}",
+                total, accuracy, fluency, completeness, clarity, words.size());
         return new SpeechEvalResult(total, accuracy, fluency, completeness, clarity, words, root);
     }
 
@@ -157,7 +165,7 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
 
     private String firstAttr(String attrs, String... names) {
         for (String name : names) {
-            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(name + "=\"([^\"]*)\"").matcher(attrs);
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(name + "=\\\"([^\\\"]*)\\\"").matcher(attrs);
             if (matcher.find()) {
                 return matcher.group(1);
             }
@@ -173,46 +181,56 @@ public class IflytekSpeechEvalProvider implements SpeechEvalProvider {
         return 0;
     }
 
-    private JsonNode unwrapIflytekWebSocketResult(JsonNode root) {
+    private JsonNode unwrapIflytekResult(JsonNode root) {
+        String base64Result = root.path("data").path("data").asText("");
         JsonNode finalNode = root.path("final");
-        if (!finalNode.isMissingNode() && !finalNode.isEmpty()) {
-            String base64Result = finalNode.path("data").path("data").asText("");
-            if (StringUtils.hasText(base64Result)) {
-                try {
-                    String decoded = new String(Base64.getDecoder().decode(base64Result), StandardCharsets.UTF_8);
-                    return objectMapper.createObjectNode()
-                            .put("rawXml", decoded)
-                            .put("totalScore", extractXmlScore(decoded, "total_score", "total"))
-                            .put("accuracyScore", extractXmlScore(decoded, "accuracy_score", "accuracy"))
-                            .put("fluencyScore", extractXmlScore(decoded, "fluency_score", "fluency"))
-                            .put("completenessScore", extractXmlScore(decoded, "integrity_score", "completeness"))
-                            .put("clarityScore", extractXmlScore(decoded, "standard_score", "clarity"));
-                } catch (Exception ex) {
-                    log.warn("Failed to decode Iflytek speech evaluation payload", ex);
-                }
+        if (!StringUtils.hasText(base64Result) && !finalNode.isMissingNode() && !finalNode.isEmpty()) {
+            base64Result = finalNode.path("data").path("data").asText("");
+        }
+        if (StringUtils.hasText(base64Result)) {
+            try {
+                String decoded = new String(Base64.getDecoder().decode(base64Result), StandardCharsets.UTF_8);
+                return objectMapper.createObjectNode()
+                        .put("rawXml", decoded)
+                        .put("totalScore", extractXmlScore(decoded, "total_score", "total"))
+                        .put("accuracyScore", extractXmlScore(decoded, "accuracy_score", "accuracy"))
+                        .put("fluencyScore", extractXmlScore(decoded, "fluency_score", "fluency"))
+                        .put("completenessScore", extractXmlScore(decoded, "integrity_score", "completeness"))
+                        .put("clarityScore", extractXmlScore(decoded, "standard_score", "phone_score", "pronunciation_score", "clarity"));
+            } catch (Exception ex) {
+                log.warn("Failed to decode Iflytek speech evaluation payload", ex);
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "语音评测结果解析失败：最终结果不是有效 Base64 XML", ex);
             }
+        }
+        if (!finalNode.isMissingNode() && !finalNode.isEmpty()) {
             return finalNode;
         }
         return root;
     }
 
-    private int extractXmlScore(String xml, String primaryAttr, String fallbackAttr) {
-        int score = extractAttr(xml, primaryAttr);
-        if (score > 0) return score;
-        score = extractAttr(xml, fallbackAttr);
-        return score > 0 ? score : 0;
+    private int extractXmlScore(String xml, String... attrs) {
+        for (String attr : attrs) {
+            int score = extractAttr(xml, attr);
+            if (score > 0) return score;
+        }
+        return 0;
     }
 
     private int extractAttr(String xml, String attr) {
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(attr + "=\"([0-9.]+)\"").matcher(xml);
         if (matcher.find()) {
-            return Math.max(0, Math.min(100, (int) Math.round(Double.parseDouble(matcher.group(1)))));
+            return normalizeScore(Double.parseDouble(matcher.group(1)));
         }
         return 0;
     }
 
+    private int normalizeScore(double value) {
+        double normalized = value > 0 && value <= 5 ? value * 20 : value;
+        return Math.max(0, Math.min(100, (int) Math.round(normalized)));
+    }
+
     private int score(JsonNode scores, String primary, String fallback) {
-        int value = scores.path(primary).asInt(scores.path(fallback).asInt(0));
-        return Math.max(0, Math.min(100, value));
+        double value = scores.path(primary).asDouble(scores.path(fallback).asDouble(0));
+        return normalizeScore(value);
     }
 }

@@ -81,7 +81,7 @@ public class AudioTranscodeService {
             if (pcmBytes.length == 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "音频转码失败：输出 PCM 为空，请重新录音。");
             }
-            log.info("[SpeechEval] pcmSize={}", pcmBytes.length);
+            log.info("[SpeechEval] ffmpeg transcode succeeded pcmSize={}", pcmBytes.length);
             return pcmBytes;
         } catch (ResponseStatusException ex) {
             throw ex;
